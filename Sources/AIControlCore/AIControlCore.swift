@@ -153,11 +153,16 @@ final class ControlStore: ObservableObject {
     @discardableResult
     func refresh() -> Task<Void, Never>? {
         guard !isRefreshing else { return nil }
+        let previousUpdatedText = updatedText
         isRefreshing = true
         updatedText = "Refreshing usage…"
-        return Task { @MainActor [weak self, refreshDelay] in
+        return Task { @MainActor [weak self, refreshDelay, previousUpdatedText] in
             await refreshDelay()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                self?.isRefreshing = false
+                self?.updatedText = previousUpdatedText
+                return
+            }
             self?.isRefreshing = false
             self?.updatedText = "Updated just now"
         }

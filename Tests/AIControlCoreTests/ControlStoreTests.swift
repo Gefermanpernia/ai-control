@@ -17,8 +17,8 @@ private actor ControlledRefreshDelay {
         }
     }
 
-    func waitUntilStarted() async {
-        guard callCount == 0 else { return }
+    func waitUntilStarted(callCount expectedCallCount: Int = 1) async {
+        guard callCount < expectedCallCount else { return }
         await withCheckedContinuation { continuation in
             startContinuations.append(continuation)
         }
@@ -209,6 +209,33 @@ struct ControlStoreTests {
 
         await delay.complete()
         await refreshTask.value
+    }
+
+    @Test("Cancelling refresh restores prior state and permits another refresh")
+    func cancellingRefreshRestoresPriorStateAndPermitsAnotherRefresh() async throws {
+        let delay = ControlledRefreshDelay()
+        let store = makeStore(refreshDelay: { await delay.wait() })
+        let priorUpdatedText = store.updatedText
+        let refreshTask = try #require(store.refresh())
+
+        #expect(store.isRefreshing)
+        #expect(store.updatedText == "Refreshing usage…")
+        await delay.waitUntilStarted()
+
+        refreshTask.cancel()
+        await delay.complete()
+        await refreshTask.value
+
+        #expect(store.isRefreshing == false)
+        #expect(store.updatedText == priorUpdatedText)
+
+        let nextRefreshTask = try #require(store.refresh())
+        await delay.waitUntilStarted(callCount: 2)
+        #expect(store.isRefreshing)
+        #expect(await delay.callCount == 2)
+
+        await delay.complete()
+        await nextRefreshTask.value
     }
 
     // MARK: - Menu warning
