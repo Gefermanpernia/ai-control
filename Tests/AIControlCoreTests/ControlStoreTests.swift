@@ -1,6 +1,35 @@
 import Testing
 @testable import AIControlCore
 
+private actor ControlledRefreshDelay {
+    private var delayContinuation: CheckedContinuation<Void, Never>?
+    private var startContinuations: [CheckedContinuation<Void, Never>] = []
+    private(set) var callCount = 0
+
+    func wait() async {
+        callCount += 1
+        let continuations = startContinuations
+        startContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+
+        await withCheckedContinuation { continuation in
+            delayContinuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard callCount == 0 else { return }
+        await withCheckedContinuation { continuation in
+            startContinuations.append(continuation)
+        }
+    }
+
+    func complete() {
+        delayContinuation?.resume()
+        delayContinuation = nil
+    }
+}
+
 @MainActor
 struct ControlStoreTests {
 
@@ -9,8 +38,10 @@ struct ControlStoreTests {
     /// Builds a store with the background refresh timer switched off through the
     /// store's own API, so assertions depend only on state transitions and never
     /// on wall-clock timing.
-    private func makeStore() -> ControlStore {
-        let store = ControlStore()
+    private func makeStore(
+        refreshDelay: @escaping @Sendable () async -> Void = {}
+    ) -> ControlStore {
+        let store = ControlStore(refreshDelay: refreshDelay)
         store.automaticRefresh = false
         return store
     }
@@ -68,6 +99,26 @@ struct ControlStoreTests {
         #expect(store.switchMessage == nil)
     }
 
+    @Test("Selecting an account from another provider preserves switch and undo state")
+    func selectingCrossProviderAccountIsANoOp() throws {
+        let store = makeStore()
+        let claudeAccount = try account("claude-personal", for: .claude, in: store)
+        let codexAccount = try account("codex-consulting", for: .codex, in: store)
+        store.select(claudeAccount, for: .claude)
+        let switchMessage = store.switchMessage
+
+        store.select(codexAccount, for: .claude)
+
+        #expect(store.activeAccountIDs[.claude] == "claude-personal")
+        #expect(store.activeAccountIDs[.codex] == "codex-personal")
+        #expect(store.lastSwitch?.provider == .claude)
+        #expect(store.lastSwitch?.previousID == "claude-work")
+        #expect(store.switchMessage == switchMessage)
+
+        store.undoLastSwitch()
+        #expect(store.activeAccountIDs[.claude] == "claude-work")
+    }
+
     // MARK: - Undo
 
     @Test("Undo restores the previously active account after a switch")
@@ -121,6 +172,43 @@ struct ControlStoreTests {
 
         #expect(store.activeAccountIDs[.codex] == "codex-consulting")
         #expect(store.activeAccountIDs[.claude] == "claude-work")
+    }
+
+    // MARK: - Refresh
+
+    @Test("Refresh reports progress and completion without wall-clock waiting")
+    func refreshReportsProgressAndCompletion() async throws {
+        let delay = ControlledRefreshDelay()
+        let store = makeStore(refreshDelay: { await delay.wait() })
+
+        let refreshTask = try #require(store.refresh())
+
+        #expect(store.isRefreshing)
+        #expect(store.updatedText == "Refreshing usage…")
+
+        await delay.waitUntilStarted()
+        await delay.complete()
+        await refreshTask.value
+
+        #expect(store.isRefreshing == false)
+        #expect(store.updatedText == "Updated just now")
+    }
+
+    @Test("Refresh suppresses a duplicate while one is in progress")
+    func refreshSuppressesDuplicateWhileInProgress() async throws {
+        let delay = ControlledRefreshDelay()
+        let store = makeStore(refreshDelay: { await delay.wait() })
+        let refreshTask = try #require(store.refresh())
+        await delay.waitUntilStarted()
+
+        let duplicateTask = store.refresh()
+
+        #expect(duplicateTask == nil)
+        #expect(store.isRefreshing)
+        #expect(await delay.callCount == 1)
+
+        await delay.complete()
+        await refreshTask.value
     }
 
     // MARK: - Menu warning

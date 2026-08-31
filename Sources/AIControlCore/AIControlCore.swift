@@ -114,9 +114,13 @@ final class ControlStore: ObservableObject {
         didSet { configureAutomaticRefresh() }
     }
     @Published var limitWarnings = true
+    private let refreshDelay: @Sendable () async -> Void
     private var automaticRefreshTask: Task<Void, Never>?
 
-    init() {
+    init(refreshDelay: @escaping @Sendable () async -> Void = {
+        try? await Task.sleep(nanoseconds: 700_000_000)
+    }) {
+        self.refreshDelay = refreshDelay
         configureAutomaticRefresh()
     }
 
@@ -131,7 +135,8 @@ final class ControlStore: ObservableObject {
         activeAccountIDs[provider] == account.id
     }
     func select(_ account: Account, for provider: CLIProvider) {
-        guard account.status.isSelectable,
+        guard let account = accounts(for: provider).first(where: { $0.id == account.id }),
+              account.status.isSelectable,
               let previousID = activeAccountIDs[provider], previousID != account.id else { return }
         activeAccountIDs[provider] = account.id
         lastSwitch = SwitchAction(provider: provider, previousID: previousID)
@@ -145,12 +150,13 @@ final class ControlStore: ObservableObject {
         switchMessage = "↶ \(action.provider.title) restored to \(account.name)"
         lastSwitch = nil
     }
-    func refresh() {
-        guard !isRefreshing else { return }
+    @discardableResult
+    func refresh() -> Task<Void, Never>? {
+        guard !isRefreshing else { return nil }
         isRefreshing = true
         updatedText = "Refreshing usage…"
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 700_000_000)
+        return Task { @MainActor [weak self, refreshDelay] in
+            await refreshDelay()
             guard !Task.isCancelled else { return }
             self?.isRefreshing = false
             self?.updatedText = "Updated just now"
@@ -222,7 +228,7 @@ struct ControlView: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
-            Button(action: store.refresh) {
+            Button(action: { store.refresh() }) {
                 if store.isRefreshing { ProgressView().controlSize(.small) }
                 else { Image(systemName: "arrow.clockwise") }
             }
