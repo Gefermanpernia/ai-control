@@ -1,0 +1,1436 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:,">
+  <title>AI Control — Menu Bar Mockup</title>
+  <style>
+    :root {
+      /* Primitive color tokens */
+      --neutral-0: #ffffff;
+      --neutral-25: #f7f7f8;
+      --neutral-50: #eeeff1;
+      --neutral-100: #e7e9ed;
+      --neutral-200: #d4d6da;
+      --neutral-500: #5e6268;
+      --neutral-900: #17181a;
+      --dark-700: #44474f;
+      --dark-800: #303238;
+      --dark-850: #2b2d31;
+      --dark-900: #222326;
+      --dark-text: #f4f5f7;
+      --dark-muted: #b8bcc4;
+      --indigo-50: #e8ebff;
+      --indigo-200: #aab6ff;
+      --indigo-500: #4457d7;
+      --indigo-700: #3042bb;
+      --indigo-900: #343a63;
+      --green-600: #157347;
+      --green-300: #7dd3a4;
+      --amber-700: #8a5100;
+      --amber-300: #ffd07a;
+      --red-700: #b42318;
+      --red-300: #ff9b92;
+      --claude-light: #f4e2dc;
+      --claude-dark: #523a33;
+      --claude-ink-light: #7c3828;
+      --claude-ink-dark: #ffc0ad;
+      --codex-light: #dfeceb;
+      --codex-dark: #294643;
+      --codex-ink-light: #185d57;
+      --codex-ink-dark: #9ee4dc;
+      --desktop-light: #5a6785;
+      --desktop-dark: #171b24;
+      --desktop-text-light: #e8eaed;
+      --desktop-text-dark: #f1f3f7;
+      --menu-light: rgba(238, 240, 244, 0.96);
+      --menu-dark: rgba(31, 34, 42, 0.97);
+      --shadow-light: rgba(20, 23, 31, 0.24);
+      --shadow-dark: rgba(0, 0, 0, 0.52);
+      --transparent: transparent;
+
+      /* Primitive geometry and motion tokens */
+      --line-hairline: 1px;
+      --line-focus: 2px;
+      --active-rail: 3px;
+      --space-0: 0;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-7: 28px;
+      --space-8: 32px;
+      --space-10: 40px;
+      --space-11: 44px;
+      --space-12: 48px;
+      --space-14: 56px;
+      --space-16: 64px;
+      --radius-control: 6px;
+      --radius-group: 9px;
+      --radius-popover: 14px;
+      --radius-pill: 999px;
+      --font-utility: 11px;
+      --font-caption: 12px;
+      --font-body: 13px;
+      --font-title: 15px;
+      --font-menu: 13px;
+      --font-desktop: 12px;
+      --weight-regular: 400;
+      --weight-medium: 500;
+      --weight-semibold: 600;
+      --line-compact: 1.2;
+      --line-body: 1.35;
+      --tracking-tight: -0.01em;
+      --tracking-utility: 0.01em;
+      --popover-width: 400px;
+      --popover-max-height: 756px;
+      --popover-offset: 92px;
+      --menu-height: 28px;
+      --toolbar-target: 28px;
+      --provider-mark-size: 24px;
+      --status-dot-size: 6px;
+      --meter-height: 4px;
+      --account-min-height: 60px;
+      --settings-row-min-height: 52px;
+      --segment-height: 32px;
+      --toggle-width: 36px;
+      --toggle-height: 20px;
+      --toggle-thumb: 16px;
+      --toggle-inset: 2px;
+      --dock-height: 60px;
+      --dock-icon: 40px;
+      --desktop-icon: 52px;
+      --visually-hidden-size: 1px;
+      --viewport-inline: 100vw;
+      --viewport-block: 100vh;
+      --size-full: 100%;
+      --size-half: 50%;
+      --clip-hidden: inset(50%);
+      --opacity-muted: 0.62;
+      --opacity-pressed: 0.72;
+      --opacity-refresh-low: 0.48;
+      --shadow-popover: 0 18px 48px;
+      --shadow-control: 0 1px 2px;
+      --shadow-dock: 0 8px 28px;
+      --motion-fast: 140ms;
+      --motion-refresh: 900ms;
+      --motion-refresh-feedback: 1200ms;
+      --motion-notice: 5000ms;
+      --motion-none: 0ms;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --rotation-full: 360deg;
+      --scale-pressed: 0.96;
+      --translate-center: -50%;
+      --grid-share: 1fr;
+      --grid-segment-count: 3;
+      --iteration-once: 1;
+      --z-menu: 10;
+      --z-popover: 20;
+
+      /* Semantic tokens: light theme */
+      --desktop-background: var(--desktop-light);
+      --desktop-foreground: var(--desktop-text-light);
+      --menu-background: var(--menu-light);
+      --surface-popover: var(--neutral-25);
+      --surface-raised: var(--neutral-0);
+      --surface-subtle: var(--neutral-50);
+      --surface-hover: var(--neutral-50);
+      --surface-pressed: var(--neutral-200);
+      --surface-disabled: var(--neutral-50);
+      --text-primary: var(--neutral-900);
+      --text-secondary: var(--neutral-500);
+      --text-on-accent: var(--neutral-0);
+      --border-subtle: var(--neutral-200);
+      --border-strong: var(--neutral-500);
+      --focus-ring: var(--indigo-500);
+      --accent-primary: var(--indigo-500);
+      --accent-foreground: var(--indigo-700);
+      --accent-soft: var(--indigo-50);
+      --status-positive: var(--green-600);
+      --status-warning: var(--amber-700);
+      --status-danger: var(--red-700);
+      --provider-claude-surface: var(--claude-light);
+      --provider-claude-text: var(--claude-ink-light);
+      --provider-codex-surface: var(--codex-light);
+      --provider-codex-text: var(--codex-ink-light);
+      --desktop-folder-surface: var(--indigo-50);
+      --desktop-folder-text: var(--indigo-700);
+      --desktop-folder-border: var(--indigo-200);
+      --popover-shadow-color: var(--shadow-light);
+      --dock-background: var(--menu-light);
+    }
+
+    body[data-theme="dark"] {
+      --desktop-background: var(--desktop-dark);
+      --desktop-foreground: var(--desktop-text-dark);
+      --menu-background: var(--menu-dark);
+      --surface-popover: var(--dark-900);
+      --surface-raised: var(--dark-850);
+      --surface-subtle: var(--dark-800);
+      --surface-hover: var(--dark-800);
+      --surface-pressed: var(--dark-700);
+      --surface-disabled: var(--dark-800);
+      --text-primary: var(--dark-text);
+      --text-secondary: var(--dark-muted);
+      --text-on-accent: var(--neutral-900);
+      --border-subtle: var(--dark-700);
+      --border-strong: var(--dark-muted);
+      --focus-ring: var(--indigo-200);
+      --accent-primary: var(--indigo-200);
+      --accent-foreground: var(--indigo-200);
+      --accent-soft: var(--indigo-900);
+      --status-positive: var(--green-300);
+      --status-warning: var(--amber-300);
+      --status-danger: var(--red-300);
+      --provider-claude-surface: var(--claude-dark);
+      --provider-claude-text: var(--claude-ink-dark);
+      --provider-codex-surface: var(--codex-dark);
+      --provider-codex-text: var(--codex-ink-dark);
+      --desktop-folder-surface: var(--indigo-900);
+      --desktop-folder-text: var(--indigo-200);
+      --desktop-folder-border: var(--indigo-200);
+      --popover-shadow-color: var(--shadow-dark);
+      --dock-background: var(--menu-dark);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: var(--space-0);
+      min-height: var(--size-full);
+    }
+
+    body {
+      color: var(--text-primary);
+      background: var(--desktop-background);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      font-size: var(--font-body);
+      font-weight: var(--weight-regular);
+      line-height: var(--line-body);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    .desktop {
+      position: relative;
+      min-height: var(--viewport-block);
+      overflow: hidden;
+      background: var(--desktop-background);
+      color: var(--desktop-foreground);
+    }
+
+    .menu-bar {
+      position: relative;
+      z-index: var(--z-menu);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: var(--size-full);
+      height: var(--menu-height);
+      padding-inline: var(--space-3);
+      overflow: hidden;
+      color: var(--text-primary);
+      background: var(--menu-background);
+      border-bottom: var(--line-hairline) solid var(--border-subtle);
+      font-size: var(--font-menu);
+      line-height: var(--line-compact);
+      white-space: nowrap;
+    }
+
+    .menu-left,
+    .menu-right {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: var(--space-0);
+    }
+
+    .menu-left strong {
+      font-weight: var(--weight-semibold);
+    }
+
+    .menu-right {
+      gap: var(--space-2);
+      font-size: var(--font-caption);
+    }
+
+    .menu-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      min-width: var(--space-10);
+      height: var(--space-6);
+      padding-inline: var(--space-2);
+      color: var(--text-primary);
+      background: var(--accent-soft);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-control);
+      cursor: pointer;
+    }
+
+    .menu-trigger:hover {
+      background: var(--surface-hover);
+    }
+
+    .menu-trigger:active {
+      background: var(--surface-pressed);
+    }
+
+    .menu-trigger:focus-visible,
+    .toolbar-button:focus-visible,
+    .text-button:focus-visible,
+    .undo-button:focus-visible,
+    .segment input:focus-visible + span,
+    .toggle input:focus-visible + .toggle-track {
+      outline: var(--line-focus) solid var(--focus-ring);
+      outline-offset: var(--line-focus);
+    }
+
+    .menu-glyph,
+    .app-mark {
+      font-family: "SF Mono", ui-monospace, monospace;
+      font-weight: var(--weight-semibold);
+      letter-spacing: var(--tracking-tight);
+    }
+
+    .desktop-file {
+      position: absolute;
+      top: var(--space-16);
+      right: var(--space-5);
+      display: grid;
+      justify-items: center;
+      gap: var(--space-1);
+      width: var(--space-16);
+      color: var(--desktop-foreground);
+      font-size: var(--font-desktop);
+      text-align: center;
+      text-shadow: var(--shadow-control) var(--popover-shadow-color);
+    }
+
+    .folder-icon {
+      display: grid;
+      place-items: center;
+      width: var(--desktop-icon);
+      height: var(--space-10);
+      color: var(--desktop-folder-text);
+      background: var(--desktop-folder-surface);
+      border: var(--line-hairline) solid var(--desktop-folder-border);
+      border-radius: var(--radius-control);
+      font-weight: var(--weight-semibold);
+      text-shadow: none;
+    }
+
+    .dock {
+      position: absolute;
+      left: var(--size-half);
+      bottom: var(--space-2);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      height: var(--dock-height);
+      padding-inline: var(--space-2);
+      background: var(--dock-background);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-popover);
+      box-shadow: var(--shadow-dock) var(--popover-shadow-color);
+      transform: translateX(var(--translate-center));
+    }
+
+    .dock-icon {
+      display: grid;
+      place-items: center;
+      width: var(--dock-icon);
+      height: var(--dock-icon);
+      color: var(--text-primary);
+      background: var(--surface-raised);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-group);
+      font-weight: var(--weight-semibold);
+    }
+
+    .popover {
+      position: absolute;
+      z-index: var(--z-popover);
+      top: calc(var(--menu-height) + var(--space-1));
+      right: var(--space-2);
+      display: flex;
+      flex-direction: column;
+      width: min(var(--popover-width), calc(var(--viewport-inline) - var(--space-4)));
+      max-height: min(var(--popover-max-height), calc(var(--viewport-block) - var(--menu-height) - var(--space-4)));
+      overflow: hidden;
+      color: var(--text-primary);
+      background: var(--surface-popover);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-popover);
+      box-shadow: var(--shadow-popover) var(--popover-shadow-color);
+    }
+
+    .popover-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--space-12);
+      padding: var(--space-2) var(--space-3);
+      border-bottom: var(--line-hairline) solid var(--border-subtle);
+    }
+
+    .app-mark {
+      display: grid;
+      flex: none;
+      place-items: center;
+      width: var(--space-8);
+      height: var(--space-8);
+      color: var(--text-on-accent);
+      background: var(--accent-primary);
+      border-radius: var(--radius-group);
+      font-size: var(--font-caption);
+    }
+
+    .title-group {
+      min-width: var(--space-0);
+      margin-right: auto;
+    }
+
+    .title-group h1 {
+      margin: var(--space-0);
+      font-size: var(--font-title);
+      font-weight: var(--weight-semibold);
+      letter-spacing: var(--tracking-tight);
+      line-height: var(--line-compact);
+    }
+
+    .title-group p {
+      margin: var(--space-1) var(--space-0) var(--space-0);
+      color: var(--text-secondary);
+      font-size: var(--font-utility);
+      line-height: var(--line-compact);
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .toolbar-button,
+    .text-button,
+    .undo-button {
+      border: var(--line-hairline) solid var(--transparent);
+      border-radius: var(--radius-control);
+      cursor: pointer;
+    }
+
+    .toolbar-button {
+      display: grid;
+      place-items: center;
+      width: var(--toolbar-target);
+      height: var(--toolbar-target);
+      padding: var(--space-0);
+      background: var(--transparent);
+      font-size: var(--font-title);
+    }
+
+    .toolbar-button:hover,
+    .text-button:hover,
+    .undo-button:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-subtle);
+    }
+
+    .toolbar-button:active,
+    .text-button:active,
+    .undo-button:active {
+      background: var(--surface-pressed);
+      transform: scale(var(--scale-pressed));
+    }
+
+    .toolbar-button:disabled {
+      cursor: wait;
+      opacity: var(--opacity-muted);
+    }
+
+    .scroll-region {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .provider-section {
+      padding: var(--space-3);
+    }
+
+    .provider-section + .provider-section {
+      padding-top: var(--space-0);
+    }
+
+    .provider-heading {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      margin-bottom: var(--space-2);
+    }
+
+    .provider-mark {
+      display: grid;
+      flex: none;
+      place-items: center;
+      width: var(--provider-mark-size);
+      height: var(--provider-mark-size);
+      border-radius: var(--radius-control);
+      font-size: var(--font-utility);
+      font-weight: var(--weight-semibold);
+    }
+
+    .provider-mark.claude {
+      color: var(--provider-claude-text);
+      background: var(--provider-claude-surface);
+    }
+
+    .provider-mark.codex {
+      color: var(--provider-codex-text);
+      background: var(--provider-codex-surface);
+    }
+
+    .provider-title {
+      min-width: var(--space-0);
+      margin-right: auto;
+    }
+
+    .provider-title h2 {
+      margin: var(--space-0);
+      font-size: var(--font-caption);
+      font-weight: var(--weight-semibold);
+      line-height: var(--line-compact);
+    }
+
+    .provider-title p {
+      margin: var(--space-1) var(--space-0) var(--space-0);
+      color: var(--text-secondary);
+      font-size: var(--font-utility);
+      line-height: var(--line-compact);
+    }
+
+    .provider-state {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      color: var(--status-positive);
+      font-size: var(--font-utility);
+      font-weight: var(--weight-medium);
+    }
+
+    .status-dot {
+      width: var(--status-dot-size);
+      height: var(--status-dot-size);
+      background: currentColor;
+      border-radius: var(--radius-pill);
+    }
+
+    .account-list {
+      display: grid;
+      gap: var(--space-1);
+      margin: var(--space-0);
+      padding: var(--space-1);
+      list-style: none;
+      background: var(--surface-subtle);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-group);
+    }
+
+    .account-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(var(--space-0), var(--grid-share)) auto;
+      gap: var(--space-3);
+      align-items: center;
+      min-height: var(--account-min-height);
+      padding: var(--space-2) var(--space-3);
+      overflow: hidden;
+      background: var(--surface-popover);
+      border: var(--line-hairline) solid var(--transparent);
+      border-radius: var(--radius-control);
+      cursor: pointer;
+      transition: background-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out);
+    }
+
+    .account-row:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-subtle);
+    }
+
+    .account-row:active {
+      background: var(--surface-pressed);
+    }
+
+    .account-row:focus-within {
+      outline: var(--line-focus) solid var(--focus-ring);
+      outline-offset: var(--line-hairline);
+    }
+
+    .account-row[data-active="true"] {
+      background: var(--surface-raised);
+      border-color: var(--border-subtle);
+      box-shadow: inset var(--active-rail) var(--space-0) var(--accent-primary), var(--shadow-control) var(--popover-shadow-color);
+    }
+
+    .account-row[data-disabled="true"] {
+      color: var(--text-secondary);
+      background: var(--surface-disabled);
+      cursor: not-allowed;
+      opacity: var(--opacity-muted);
+    }
+
+    .account-row[data-disabled="true"]:hover {
+      border-color: var(--transparent);
+    }
+
+    .account-input {
+      position: absolute;
+      width: var(--visually-hidden-size);
+      height: var(--visually-hidden-size);
+      clip-path: var(--clip-hidden);
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .account-copy {
+      min-width: var(--space-0);
+    }
+
+    .account-name-line,
+    .usage-line,
+    .reset-line {
+      display: flex;
+      align-items: center;
+    }
+
+    .account-name-line {
+      gap: var(--space-2);
+      min-width: var(--space-0);
+    }
+
+    .account-name {
+      overflow: hidden;
+      font-weight: var(--weight-medium);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .active-badge {
+      flex: none;
+      color: var(--accent-foreground);
+      font-size: var(--font-utility);
+      font-weight: var(--weight-semibold);
+    }
+
+    .account-detail {
+      margin-top: var(--space-1);
+      color: var(--text-secondary);
+      font-size: var(--font-utility);
+      line-height: var(--line-compact);
+    }
+
+    .state-copy {
+      font-weight: var(--weight-medium);
+    }
+
+    .state-copy.normal {
+      color: var(--status-positive);
+    }
+
+    .state-copy.warning {
+      color: var(--status-warning);
+    }
+
+    .state-copy.error {
+      color: var(--status-danger);
+    }
+
+    .usage-block {
+      display: grid;
+      gap: var(--space-1);
+      width: var(--space-16);
+      text-align: right;
+    }
+
+    .usage-value,
+    .reset-line,
+    .keyboard-hint {
+      font-family: "SF Mono", ui-monospace, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .usage-value {
+      font-size: var(--font-caption);
+      font-weight: var(--weight-medium);
+      line-height: var(--line-compact);
+    }
+
+    .meter {
+      width: var(--size-full);
+      height: var(--meter-height);
+      overflow: hidden;
+      background: var(--border-subtle);
+      border-radius: var(--radius-pill);
+    }
+
+    .meter-fill {
+      width: var(--meter-value);
+      height: var(--size-full);
+      background: var(--status-positive);
+      border-radius: inherit;
+      transition: width var(--motion-fast) var(--ease-out);
+    }
+
+    .meter-fill.warning {
+      background: var(--status-warning);
+    }
+
+    .meter-fill.error {
+      background: var(--status-danger);
+    }
+
+    .reset-line {
+      justify-content: flex-end;
+      color: var(--text-secondary);
+      font-size: var(--font-utility);
+      line-height: var(--line-compact);
+    }
+
+    .refreshing .account-copy,
+    .refreshing .usage-block {
+      animation: data-pulse var(--motion-refresh) var(--ease-out) infinite alternate;
+    }
+
+    .refreshing .refresh-glyph {
+      display: inline-block;
+      animation: refresh-spin var(--motion-refresh) linear infinite;
+    }
+
+    .switch-notice {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      margin: var(--space-0) var(--space-3) var(--space-3);
+      padding: var(--space-2) var(--space-3);
+      color: var(--accent-foreground);
+      background: var(--accent-soft);
+      border: var(--line-hairline) solid var(--focus-ring);
+      border-radius: var(--radius-group);
+      font-size: var(--font-caption);
+    }
+
+    .switch-notice span {
+      min-width: var(--space-0);
+      margin-right: auto;
+    }
+
+    .undo-button,
+    .text-button {
+      min-height: var(--toolbar-target);
+      padding-inline: var(--space-2);
+      background: var(--surface-raised);
+      font-size: var(--font-caption);
+      font-weight: var(--weight-semibold);
+    }
+
+    .popover-footer {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--space-10);
+      padding: var(--space-2) var(--space-3);
+      color: var(--text-secondary);
+      background: var(--surface-subtle);
+      border-top: var(--line-hairline) solid var(--border-subtle);
+      font-size: var(--font-utility);
+    }
+
+    .footer-status {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      min-width: var(--space-0);
+      margin-right: auto;
+    }
+
+    .footer-status .status-dot {
+      color: var(--status-positive);
+    }
+
+    .footer-status.refreshing-status .status-dot {
+      color: var(--accent-primary);
+    }
+
+    .keyboard-hint {
+      flex: none;
+      padding: var(--space-1) var(--space-2);
+      color: var(--text-secondary);
+      background: var(--surface-raised);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-control);
+      font-size: var(--font-utility);
+    }
+
+    .settings-panel {
+      padding: var(--space-3);
+    }
+
+    .settings-heading {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+    }
+
+    .settings-heading h2 {
+      margin: var(--space-0);
+      font-size: var(--font-body);
+      font-weight: var(--weight-semibold);
+    }
+
+    .settings-group {
+      overflow: hidden;
+      background: var(--surface-raised);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-group);
+    }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-height: var(--settings-row-min-height);
+      padding: var(--space-2) var(--space-3);
+    }
+
+    .settings-row + .settings-row {
+      border-top: var(--line-hairline) solid var(--border-subtle);
+    }
+
+    .settings-row.stack {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .setting-copy {
+      min-width: var(--space-0);
+      margin-right: auto;
+    }
+
+    .setting-label {
+      font-weight: var(--weight-medium);
+    }
+
+    .setting-help {
+      margin-top: var(--space-1);
+      color: var(--text-secondary);
+      font-size: var(--font-utility);
+    }
+
+    .segments {
+      display: grid;
+      grid-template-columns: repeat(var(--grid-segment-count), var(--grid-share));
+      gap: var(--space-1);
+      padding: var(--space-1);
+      background: var(--surface-subtle);
+      border: var(--line-hairline) solid var(--border-subtle);
+      border-radius: var(--radius-control);
+    }
+
+    .segment {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .segment input,
+    .toggle input {
+      position: absolute;
+      width: var(--visually-hidden-size);
+      height: var(--visually-hidden-size);
+      clip-path: var(--clip-hidden);
+      overflow: hidden;
+    }
+
+    .segment span {
+      display: grid;
+      place-items: center;
+      height: var(--segment-height);
+      color: var(--text-secondary);
+      border: var(--line-hairline) solid var(--transparent);
+      border-radius: var(--radius-control);
+      font-size: var(--font-caption);
+      font-weight: var(--weight-medium);
+    }
+
+    .segment:hover span {
+      color: var(--text-primary);
+      background: var(--surface-hover);
+    }
+
+    .segment input:checked + span {
+      color: var(--text-primary);
+      background: var(--surface-raised);
+      border-color: var(--border-subtle);
+      box-shadow: var(--shadow-control) var(--popover-shadow-color);
+    }
+
+    .toggle {
+      position: relative;
+      flex: none;
+      width: var(--toggle-width);
+      height: var(--toggle-height);
+      cursor: pointer;
+    }
+
+    .toggle-track {
+      display: block;
+      width: var(--size-full);
+      height: var(--size-full);
+      background: var(--border-strong);
+      border-radius: var(--radius-pill);
+      transition: background-color var(--motion-fast) var(--ease-out);
+    }
+
+    .toggle-track::after {
+      position: absolute;
+      top: var(--toggle-inset);
+      left: var(--toggle-inset);
+      width: var(--toggle-thumb);
+      height: var(--toggle-thumb);
+      background: var(--surface-raised);
+      border-radius: var(--radius-pill);
+      box-shadow: var(--shadow-control) var(--popover-shadow-color);
+      content: "";
+      transition: transform var(--motion-fast) var(--ease-out);
+    }
+
+    .toggle input:checked + .toggle-track {
+      background: var(--accent-primary);
+    }
+
+    .toggle input:checked + .toggle-track::after {
+      transform: translateX(var(--toggle-thumb));
+    }
+
+    .mock-note {
+      margin: var(--space-3) var(--space-1) var(--space-1);
+      color: var(--text-secondary);
+      font-size: var(--font-utility);
+      text-align: center;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: var(--visually-hidden-size);
+      height: var(--visually-hidden-size);
+      clip-path: var(--clip-hidden);
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    @keyframes refresh-spin {
+      to {
+        transform: rotate(var(--rotation-full));
+      }
+    }
+
+    @keyframes data-pulse {
+      to {
+        opacity: var(--opacity-refresh-low);
+      }
+    }
+
+    @media (max-width: 28rem) {
+      .menu-left span {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        animation-duration: var(--motion-none) !important;
+        animation-iteration-count: var(--iteration-once) !important;
+        transition-duration: var(--motion-none) !important;
+      }
+    }
+  </style>
+</head>
+<body data-theme="light">
+  <main class="desktop" aria-label="macOS desktop preview">
+    <nav class="menu-bar" aria-label="macOS menu bar">
+      <div class="menu-left" aria-hidden="true">
+        <strong>●</strong>
+        <strong>Terminal</strong>
+        <span>Shell</span>
+        <span>Edit</span>
+        <span>View</span>
+        <span>Window</span>
+      </div>
+      <div class="menu-right">
+        <span aria-hidden="true">⌁</span>
+        <span aria-hidden="true">▰</span>
+        <time datetime="2026-08-29T14:32:00">Sat Aug 29&nbsp; 2:32 PM</time>
+        <button class="menu-trigger" id="menuTrigger" type="button" aria-haspopup="dialog" aria-expanded="true" aria-controls="appPopover">
+          <span class="menu-glyph" aria-hidden="true">&gt;_</span>
+          <span class="sr-only">Toggle AI Control</span>
+          <span aria-hidden="true">2</span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="desktop-file" aria-hidden="true">
+      <div class="folder-icon">CLI</div>
+      <span>Projects</span>
+    </div>
+
+    <div class="dock" aria-hidden="true">
+      <div class="dock-icon">F</div>
+      <div class="dock-icon">&gt;_</div>
+      <div class="dock-icon">N</div>
+      <div class="dock-icon">⚙</div>
+    </div>
+
+    <section class="popover" id="appPopover" role="dialog" aria-label="AI Control" aria-modal="false">
+      <header class="popover-header">
+        <div class="app-mark" aria-hidden="true">AI</div>
+        <div class="title-group">
+          <h1>AI Control</h1>
+          <p>Choose the account each CLI uses</p>
+        </div>
+        <div class="toolbar">
+          <button class="toolbar-button" id="refreshButton" type="button" aria-label="Refresh account usage">
+            <span class="refresh-glyph" aria-hidden="true">↻</span>
+          </button>
+          <button class="toolbar-button" id="settingsButton" type="button" aria-label="Open settings" aria-expanded="false" aria-controls="settingsPanel">
+            <span aria-hidden="true">⚙</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="scroll-region" id="accountView">
+        <section class="provider-section" aria-labelledby="claudeTitle">
+          <div class="provider-heading">
+            <div class="provider-mark claude" aria-hidden="true">CL</div>
+            <div class="provider-title">
+              <h2 id="claudeTitle">Claude CLI</h2>
+              <p>3 accounts · switches Claude Code</p>
+            </div>
+            <span class="provider-state"><span class="status-dot" aria-hidden="true"></span>Ready</span>
+          </div>
+
+          <ul class="account-list" aria-label="Claude CLI accounts">
+            <li>
+              <label class="account-row" data-active="true" data-disabled="false">
+                <input class="account-input" type="radio" name="claude-account" value="Maya Work" data-provider="Claude CLI" checked>
+                <span class="account-copy">
+                  <span class="account-name-line">
+                    <span class="account-name">Maya Work</span>
+                    <span class="active-badge">✓ Active</span>
+                  </span>
+                  <span class="account-detail"><span class="state-copy normal">Normal</span> · Pro plan</span>
+                </span>
+                <span class="usage-block">
+                  <span class="usage-value">42% used</span>
+                  <span class="meter" role="progressbar" aria-label="Maya Work usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="42">
+                    <span class="meter-fill" style="--meter-value: 42%;"></span>
+                  </span>
+                  <span class="reset-line">Resets 4h</span>
+                </span>
+              </label>
+            </li>
+            <li>
+              <label class="account-row" data-active="false" data-disabled="false">
+                <input class="account-input" type="radio" name="claude-account" value="Personal" data-provider="Claude CLI">
+                <span class="account-copy">
+                  <span class="account-name-line">
+                    <span class="account-name">Personal</span>
+                    <span class="active-badge" hidden>✓ Active</span>
+                  </span>
+                  <span class="account-detail"><span class="state-copy warning">▲ 9% left</span> · Max plan</span>
+                </span>
+                <span class="usage-block">
+                  <span class="usage-value">91% used</span>
+                  <span class="meter" role="progressbar" aria-label="Personal Claude usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="91">
+                    <span class="meter-fill warning" style="--meter-value: 91%;"></span>
+                  </span>
+                  <span class="reset-line">Resets 42m</span>
+                </span>
+              </label>
+            </li>
+            <li>
+              <label class="account-row" data-active="false" data-disabled="true">
+                <input class="account-input" type="radio" name="claude-account" value="Lab Sandbox" data-provider="Claude CLI" disabled>
+                <span class="account-copy">
+                  <span class="account-name-line">
+                    <span class="account-name">Lab Sandbox</span>
+                    <span class="active-badge" hidden>✓ Active</span>
+                  </span>
+                  <span class="account-detail"><span class="state-copy error">! Unavailable</span> · Reconnect in Settings</span>
+                </span>
+                <span class="usage-block">
+                  <span class="usage-value">—</span>
+                  <span class="meter" aria-hidden="true">
+                    <span class="meter-fill error" style="--meter-value: 0%;"></span>
+                  </span>
+                  <span class="reset-line">Not checked</span>
+                </span>
+              </label>
+            </li>
+          </ul>
+        </section>
+
+        <section class="provider-section" aria-labelledby="codexTitle">
+          <div class="provider-heading">
+            <div class="provider-mark codex" aria-hidden="true">CX</div>
+            <div class="provider-title">
+              <h2 id="codexTitle">Codex CLI</h2>
+              <p>3 accounts · switches OpenAI Codex</p>
+            </div>
+            <span class="provider-state"><span class="status-dot" aria-hidden="true"></span>Ready</span>
+          </div>
+
+          <ul class="account-list" aria-label="Codex CLI accounts">
+            <li>
+              <label class="account-row" data-active="true" data-disabled="false">
+                <input class="account-input" type="radio" name="codex-account" value="Personal Plus" data-provider="Codex CLI" checked>
+                <span class="account-copy">
+                  <span class="account-name-line">
+                    <span class="account-name">Personal Plus</span>
+                    <span class="active-badge">✓ Active</span>
+                  </span>
+                  <span class="account-detail"><span class="state-copy normal">Normal</span> · Plus plan</span>
+                </span>
+                <span class="usage-block">
+                  <span class="usage-value">67% used</span>
+                  <span class="meter" role="progressbar" aria-label="Personal Plus usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="67">
+                    <span class="meter-fill" style="--meter-value: 67%;"></span>
+                  </span>
+                  <span class="reset-line">Resets 2h</span>
+                </span>
+              </label>
+            </li>
+            <li>
+              <label class="account-row" data-active="false" data-disabled="false">
+                <input class="account-input" type="radio" name="codex-account" value="Consulting" data-provider="Codex CLI">
+                <span class="account-copy">
+                  <span class="account-name-line">
+                    <span class="account-name">Consulting</span>
+                    <span class="active-badge" hidden>✓ Active</span>
+                  </span>
+                  <span class="account-detail"><span class="state-copy warning">▲ 12% left</span> · Team seat</span>
+                </span>
+                <span class="usage-block">
+                  <span class="usage-value">88% used</span>
+                  <span class="meter" role="progressbar" aria-label="Consulting usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="88">
+                    <span class="meter-fill warning" style="--meter-value: 88%;"></span>
+                  </span>
+                  <span class="reset-line">Resets 1h</span>
+                </span>
+              </label>
+            </li>
+            <li>
+              <label class="account-row" data-active="false" data-disabled="true">
+                <input class="account-input" type="radio" name="codex-account" value="Playground" data-provider="Codex CLI" disabled>
+                <span class="account-copy">
+                  <span class="account-name-line">
+                    <span class="account-name">Playground</span>
+                    <span class="active-badge" hidden>✓ Active</span>
+                  </span>
+                  <span class="account-detail"><span class="state-copy error">! Usage unavailable</span> · Try refresh</span>
+                </span>
+                <span class="usage-block">
+                  <span class="usage-value">Error</span>
+                  <span class="meter" aria-hidden="true">
+                    <span class="meter-fill error" style="--meter-value: 100%;"></span>
+                  </span>
+                  <span class="reset-line">Last seen 1d</span>
+                </span>
+              </label>
+            </li>
+          </ul>
+        </section>
+      </div>
+
+      <section class="settings-panel" id="settingsPanel" aria-labelledby="settingsTitle" hidden>
+        <div class="settings-heading">
+          <button class="text-button" id="backButton" type="button">‹ Back</button>
+          <h2 id="settingsTitle">Settings</h2>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-row stack">
+            <div class="setting-copy">
+              <div class="setting-label">Appearance</div>
+              <div class="setting-help">Preview the popover in a system theme.</div>
+            </div>
+            <div class="segments" role="radiogroup" aria-label="Appearance">
+              <label class="segment">
+                <input type="radio" name="appearance" value="system" checked>
+                <span>System</span>
+              </label>
+              <label class="segment">
+                <input type="radio" name="appearance" value="light">
+                <span>Light</span>
+              </label>
+              <label class="segment">
+                <input type="radio" name="appearance" value="dark">
+                <span>Dark</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="setting-copy">
+              <div class="setting-label">Refresh automatically</div>
+              <div class="setting-help">Check usage every 5 minutes.</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked aria-label="Refresh automatically">
+              <span class="toggle-track" aria-hidden="true"></span>
+            </label>
+          </div>
+
+          <div class="settings-row">
+            <div class="setting-copy">
+              <div class="setting-label">Limit warnings</div>
+              <div class="setting-help">Show a menu-bar alert below 15%.</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked aria-label="Limit warnings">
+              <span class="toggle-track" aria-hidden="true"></span>
+            </label>
+          </div>
+        </div>
+        <p class="mock-note">Mock settings only · No credentials are shown or stored</p>
+      </section>
+
+      <div class="switch-notice" id="switchNotice" role="status" aria-live="polite" hidden>
+        <span id="switchMessage"></span>
+        <button class="undo-button" id="undoButton" type="button">Undo</button>
+      </div>
+
+      <footer class="popover-footer">
+        <div class="footer-status" id="footerStatus">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="updatedText">Updated just now</span>
+        </div>
+        <span class="keyboard-hint" aria-label="Keyboard shortcut Command Shift A">⌘⇧A</span>
+      </footer>
+      <div class="sr-only" id="announcer" aria-live="assertive"></div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const body = document.body;
+      const popover = document.getElementById('appPopover');
+      const menuTrigger = document.getElementById('menuTrigger');
+      const accountView = document.getElementById('accountView');
+      const settingsPanel = document.getElementById('settingsPanel');
+      const settingsButton = document.getElementById('settingsButton');
+      const backButton = document.getElementById('backButton');
+      const refreshButton = document.getElementById('refreshButton');
+      const updatedText = document.getElementById('updatedText');
+      const footerStatus = document.getElementById('footerStatus');
+      const switchNotice = document.getElementById('switchNotice');
+      const switchMessage = document.getElementById('switchMessage');
+      const undoButton = document.getElementById('undoButton');
+      const announcer = document.getElementById('announcer');
+      const themeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const style = getComputedStyle(document.documentElement);
+      const refreshDelay = Number.parseFloat(style.getPropertyValue('--motion-refresh-feedback'));
+      const noticeDelay = Number.parseFloat(style.getPropertyValue('--motion-notice'));
+      const accountInputs = [...document.querySelectorAll('.account-input')];
+      const appearanceInputs = [...document.querySelectorAll('input[name="appearance"]')];
+      const activeAccounts = new Map();
+      let undoState = null;
+      let noticeTimer = null;
+      let appearanceMode = 'system';
+
+      function announce(message) {
+        announcer.textContent = '';
+        window.requestAnimationFrame(() => {
+          announcer.textContent = message;
+        });
+      }
+
+      function syncAccountRows(provider) {
+        accountInputs
+          .filter((input) => input.dataset.provider === provider)
+          .forEach((input) => {
+            const row = input.closest('.account-row');
+            const badge = row.querySelector('.active-badge');
+            row.dataset.active = String(input.checked);
+            badge.hidden = !input.checked;
+          });
+      }
+
+      function resetMockAccounts() {
+        activeAccounts.clear();
+        accountInputs.forEach((input) => {
+          input.autocomplete = 'off';
+          input.checked = input.hasAttribute('checked');
+          if (input.checked) activeAccounts.set(input.dataset.provider, input.value);
+        });
+        [...activeAccounts.keys()].forEach(syncAccountRows);
+        undoState = null;
+        switchNotice.hidden = true;
+      }
+
+      function showSwitchNotice(message, canUndo) {
+        window.clearTimeout(noticeTimer);
+        switchMessage.textContent = message;
+        undoButton.hidden = !canUndo;
+        switchNotice.hidden = false;
+        noticeTimer = window.setTimeout(() => {
+          switchNotice.hidden = true;
+        }, noticeDelay);
+      }
+
+      accountInputs.forEach((input) => {
+        input.addEventListener('change', () => {
+          if (!input.checked || input.disabled) return;
+          const provider = input.dataset.provider;
+          const previous = activeAccounts.get(provider);
+          if (previous === input.value) return;
+
+          activeAccounts.set(provider, input.value);
+          undoState = { provider, previous, current: input.value };
+          syncAccountRows(provider);
+          const message = `${provider} switched to ${input.value}`;
+          showSwitchNotice(`✓ ${message}`, true);
+          announce(message);
+        });
+      });
+
+      undoButton.addEventListener('click', () => {
+        if (!undoState) return;
+        const target = accountInputs.find((input) =>
+          input.dataset.provider === undoState.provider && input.value === undoState.previous
+        );
+        if (!target || target.disabled) return;
+
+        target.checked = true;
+        activeAccounts.set(undoState.provider, undoState.previous);
+        syncAccountRows(undoState.provider);
+        const message = `${undoState.provider} restored to ${undoState.previous}`;
+        showSwitchNotice(`↶ ${message}`, false);
+        announce(message);
+        undoState = null;
+      });
+
+      refreshButton.addEventListener('click', () => {
+        if (refreshButton.disabled) return;
+        refreshButton.disabled = true;
+        refreshButton.setAttribute('aria-label', 'Refreshing account usage');
+        accountView.classList.add('refreshing');
+        accountView.setAttribute('aria-busy', 'true');
+        footerStatus.classList.add('refreshing-status');
+        updatedText.textContent = 'Refreshing usage…';
+        announce('Refreshing account usage');
+
+        window.setTimeout(() => {
+          refreshButton.disabled = false;
+          refreshButton.setAttribute('aria-label', 'Refresh account usage');
+          accountView.classList.remove('refreshing');
+          accountView.setAttribute('aria-busy', 'false');
+          footerStatus.classList.remove('refreshing-status');
+          updatedText.textContent = 'Updated just now';
+          announce('Usage refreshed');
+        }, refreshDelay);
+      });
+
+      function openSettings() {
+        accountView.hidden = true;
+        settingsPanel.hidden = false;
+        settingsButton.setAttribute('aria-expanded', 'true');
+        settingsButton.setAttribute('aria-label', 'Close settings');
+        backButton.focus();
+      }
+
+      function closeSettings({ restoreFocus = true } = {}) {
+        accountView.hidden = false;
+        settingsPanel.hidden = true;
+        settingsButton.setAttribute('aria-expanded', 'false');
+        settingsButton.setAttribute('aria-label', 'Open settings');
+        if (restoreFocus) settingsButton.focus();
+      }
+
+      settingsButton.addEventListener('click', () => {
+        if (settingsPanel.hidden) openSettings();
+        else closeSettings();
+      });
+
+      backButton.addEventListener('click', () => closeSettings());
+
+      function applyTheme(mode, shouldAnnounce = true) {
+        appearanceMode = mode;
+        const resolved = mode === 'system' ? (themeQuery.matches ? 'dark' : 'light') : mode;
+        body.dataset.theme = resolved;
+        appearanceInputs.forEach((input) => {
+          input.checked = input.value === mode;
+        });
+        if (shouldAnnounce) announce(`Appearance set to ${mode}`);
+      }
+
+      appearanceInputs.forEach((input) => {
+        input.addEventListener('change', () => {
+          if (input.checked) applyTheme(input.value);
+        });
+      });
+
+      themeQuery.addEventListener('change', () => {
+        if (appearanceMode === 'system') applyTheme('system', false);
+      });
+
+      menuTrigger.addEventListener('click', () => {
+        const willOpen = popover.hidden;
+        popover.hidden = !willOpen;
+        menuTrigger.setAttribute('aria-expanded', String(willOpen));
+        if (willOpen) refreshButton.focus();
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        if (!settingsPanel.hidden) {
+          closeSettings();
+          return;
+        }
+        if (!popover.hidden) {
+          popover.hidden = true;
+          menuTrigger.setAttribute('aria-expanded', 'false');
+          menuTrigger.focus();
+        }
+      });
+
+      applyTheme('system', false);
+      resetMockAccounts();
+      window.addEventListener('pageshow', resetMockAccounts);
+      window.addEventListener('load', () => {
+        window.requestAnimationFrame(resetMockAccounts);
+      }, { once: true });
+    })();
+  </script>
+</body>
+</html>
