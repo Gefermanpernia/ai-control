@@ -442,6 +442,107 @@ struct ClaudeLoginManagerTests {
         try adapter.delete()
         #expect(throws: IsolatedKeychainError.missing) { try adapter.read() }
     }
+
+    @Test("Protected configuration update preserves raw sentinels and file protections")
+    func protectedConfigurationPreservesRawDataAndProtections() throws {
+        let fixture = try ConfigurationFixture(
+            #"{"sentinel":900719925474099312345,"oauthAccount":{"old":true},"modelAccessCache":{"remove":true}}"#
+        )
+        defer { fixture.cleanup() }
+
+        try ProtectedConfigurationFile(path: fixture.file.path).update(
+            .init(oauthAccount: .value(#"{"new":true}"#), invalidateAccountCaches: true)
+        )
+
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) ==
+            #"{"sentinel":900719925474099312345,"oauthAccount":{"new":true}}"#)
+        let metadata = try fixture.metadata()
+        #expect(metadata.owner == geteuid())
+        #expect(metadata.mode == 0o600)
+        #expect(try fixture.temporaryFiles().isEmpty)
+    }
+
+    @Test("Protected configuration rejects oversized, deeply nested, and duplicate-key input")
+    func protectedConfigurationRejectsInvalidAdmission() throws {
+        let oversized = try ConfigurationFixture(#"{"padding":"xxxxxxxxxxxxxxxx"}"#)
+        defer { oversized.cleanup() }
+        let deep = try ConfigurationFixture(#"{"a":{"b":{"c":1}}}"#)
+        defer { deep.cleanup() }
+        let duplicate = try ConfigurationFixture(#"{"a":1,"a":2}"#)
+        defer { duplicate.cleanup() }
+        let invalidUTF8 = try ConfigurationFixture("{}")
+        defer { invalidUTF8.cleanup() }
+        try Data([0xFF]).write(to: invalidUTF8.file)
+        let shallow = try ConfigurationFixture("{}")
+        defer { shallow.cleanup() }
+
+        #expect(throws: ProtectedConfigurationError.tooLarge) {
+            try ProtectedConfigurationFile(path: oversized.file.path, maxBytes: 16).update(.init())
+        }
+        #expect(throws: ProtectedConfigurationError.tooDeep) {
+            try ProtectedConfigurationFile(path: deep.file.path, maxDepth: 2).update(.init())
+        }
+        #expect(throws: ProtectedConfigurationError.invalidDocument) {
+            try ProtectedConfigurationFile(path: duplicate.file.path).update(.init())
+        }
+        #expect(throws: ProtectedConfigurationError.invalidDocument) {
+            try ProtectedConfigurationFile(path: invalidUTF8.file.path).update(.init())
+        }
+        #expect(throws: ProtectedConfigurationError.tooDeep) {
+            try ProtectedConfigurationFile(path: shallow.file.path, maxDepth: 2)
+                .update(.init(oauthAccount: .value(#"{"x":{"y":1}}"#)))
+        }
+    }
+
+    @Test("Protected configuration refuses symlinks and unexpected owners")
+    func protectedConfigurationRefusesUnsafeFiles() throws {
+        let fixture = try ConfigurationFixture(#"{"oauthAccount":null}"#)
+        defer { fixture.cleanup() }
+        let link = fixture.directory.appendingPathComponent("linked.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fixture.file)
+
+        #expect(throws: ProtectedConfigurationError.unsafeFile) {
+            try ProtectedConfigurationFile(path: link.path).update(.init())
+        }
+        #expect(throws: ProtectedConfigurationError.unsafeFile) {
+            try ProtectedConfigurationFile(path: fixture.file.path, expectedOwner: geteuid() + 1).update(.init())
+        }
+    }
+
+    @Test("Protected configuration detects pre-commit races", arguments: ConfigurationRace.allCases)
+    func protectedConfigurationDetectsRace(_ race: ConfigurationRace) throws {
+        let fixture = try ConfigurationFixture(#"{"oauthAccount":{"old":true}}"#)
+        defer { fixture.cleanup() }
+        let writer = ProtectedConfigurationFile(path: fixture.file.path, hooks: .init(beforeCommit: {
+            try race.apply(to: fixture.file)
+        }))
+
+        #expect(throws: ProtectedConfigurationError.changedBeforeCommit) {
+            try writer.update(.init(oauthAccount: .null))
+        }
+        #expect(try fixture.temporaryFiles().isEmpty)
+    }
+
+    @Test("Protected configuration distinguishes failures before and after commit")
+    func protectedConfigurationDistinguishesCommitFailures() throws {
+        let before = try ConfigurationFixture(#"{"oauthAccount":{"old":true}}"#)
+        defer { before.cleanup() }
+        let after = try ConfigurationFixture(#"{"oauthAccount":{"old":true}}"#)
+        defer { after.cleanup() }
+
+        #expect(throws: ProtectedConfigurationError.writeFailed) {
+            try ProtectedConfigurationFile(path: before.file.path, hooks: .init(beforeCommit: { throw FixtureError() }))
+                .update(.init(oauthAccount: .null))
+        }
+        #expect(try String(contentsOf: before.file, encoding: .utf8) == #"{"oauthAccount":{"old":true}}"#)
+        #expect(try before.temporaryFiles().isEmpty)
+        #expect(throws: ProtectedConfigurationError.indeterminateAfterCommit) {
+            try ProtectedConfigurationFile(path: after.file.path, hooks: .init(afterCommit: { throw FixtureError() }))
+                .update(.init(oauthAccount: .null))
+        }
+        #expect(try String(contentsOf: after.file, encoding: .utf8) == #"{"oauthAccount":null}"#)
+        #expect(try after.temporaryFiles().isEmpty)
+    }
 }
 
 private extension IsolatedKeychainAdapter {
@@ -459,4 +560,52 @@ private extension IsolatedKeychainAdapter {
 
 private func sameKeychainList(_ lhs: [SecKeychain], _ rhs: [SecKeychain]) -> Bool {
     lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { CFEqual($0, $1) }
+}
+
+private struct FixtureError: Error {}
+
+enum ConfigurationRace: CaseIterable {
+    case content, identity, protection
+
+    func apply(to file: URL) throws {
+        switch self {
+        case .content:
+            let descriptor = open(file.path, O_WRONLY | O_TRUNC)
+            defer { close(descriptor) }
+            _ = write(descriptor, "{}", 2)
+        case .identity:
+            try FileManager.default.removeItem(at: file)
+            try Data("{}".utf8).write(to: file)
+            chmod(file.path, 0o600)
+        case .protection:
+            chmod(file.path, 0o400)
+        }
+    }
+}
+
+private final class ConfigurationFixture {
+    let directory: URL
+    let file: URL
+
+    init(_ contents: String) throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode/config-\(UUID().uuidString)", isDirectory: true)
+        file = directory.appendingPathComponent(".claude.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try Data(contents.utf8).write(to: file)
+        chmod(file.path, 0o600)
+    }
+
+    func cleanup() { try? FileManager.default.removeItem(at: directory) }
+
+    func metadata() throws -> (owner: uid_t, mode: mode_t) {
+        var value = stat()
+        guard lstat(file.path, &value) == 0 else { throw FixtureError() }
+        return (value.st_uid, value.st_mode & 0o777)
+    }
+
+    func temporaryFiles() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".aicontrol-") }
+    }
 }
