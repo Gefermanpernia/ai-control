@@ -1,3 +1,5 @@
+import Foundation
+import Security
 import Testing
 @testable import AIControlCore
 
@@ -292,4 +294,169 @@ struct ClaudeLoginManagerTests {
         #expect(backendCreations == 0)
         #expect(messages == ["Blocked: account selection is not implemented.", "Blocked: recovery is not implemented."])
     }
+
+    @Test("Isolated Keychain CRUD uses exact explicit-Keychain queries")
+    func isolatedKeychainCRUDUsesExactQueries() throws {
+        let keychain = NSObject()
+        let persistentReference = Data([0xCA, 0xFE])
+        var copiedQueries: [[CFString: Any]] = []
+        var addedQuery: [CFString: Any] = [:]
+        var updatedQuery: [CFString: Any] = [:]
+        var updatedAttributes: [CFString: Any] = [:]
+        var deletedQuery: [CFString: Any] = [:]
+        let calls = KeychainNativeCalls(
+            copy: { query, result in
+                let values = query as! [CFString: Any]
+                copiedQueries.append(values)
+                if values[kSecReturnPersistentRef] as? Bool == true {
+                    result?.pointee = [persistentReference] as CFArray
+                } else {
+                    result?.pointee = Data("updated".utf8) as CFData
+                }
+                return errSecSuccess
+            },
+            add: { query in addedQuery = query as! [CFString: Any]; return errSecSuccess },
+            update: { query, attributes in
+                updatedQuery = query as! [CFString: Any]
+                updatedAttributes = attributes as! [CFString: Any]
+                return errSecSuccess
+            },
+            delete: { query in deletedQuery = query as! [CFString: Any]; return errSecSuccess }
+        )
+        let adapter = IsolatedKeychainAdapter(
+            keychain: keychain,
+            service: "AIControl-claude-logins.v1.test-unit",
+            account: "synthetic-account",
+            calls: calls
+        )
+
+        try adapter.create(data: Data("initial".utf8))
+        #expect(try adapter.read() == Data("updated".utf8))
+        try adapter.update(data: Data("replacement".utf8))
+        try adapter.delete()
+
+        #expect(addedQuery[kSecUseKeychain] as AnyObject === keychain)
+        #expect(addedQuery[kSecMatchSearchList] == nil)
+        #expect(addedQuery[kSecAttrService] as? String == "AIControl-claude-logins.v1.test-unit")
+        #expect(addedQuery[kSecAttrAccount] as? String == "synthetic-account")
+        #expect(copiedQueries.count == 4)
+        #expect((copiedQueries[0][kSecMatchSearchList] as? [AnyObject])?.first === keychain)
+        #expect(copiedQueries[0][kSecReturnPersistentRef] as? Bool == true)
+        #expect(updatedQuery[kSecValuePersistentRef] as? Data == persistentReference)
+        #expect(updatedAttributes.count == 1)
+        #expect(updatedAttributes[kSecValueData] as? Data == Data("replacement".utf8))
+        #expect(deletedQuery[kSecValuePersistentRef] as? Data == persistentReference)
+    }
+
+    @Test("Isolated Keychain adapter distinguishes missing and duplicate items")
+    func isolatedKeychainDistinguishesMissingAndDuplicate() {
+        let missing = IsolatedKeychainAdapter.testing(status: errSecItemNotFound)
+        let duplicate = IsolatedKeychainAdapter.testing(status: errSecDuplicateItem)
+
+        #expect(throws: IsolatedKeychainError.missing) { try missing.read() }
+        #expect(throws: IsolatedKeychainError.duplicate) { try duplicate.create(data: Data()) }
+    }
+
+    @Test(
+        "Isolated Keychain adapter maps security failures deterministically",
+        arguments: [
+            (errSecAuthFailed, IsolatedKeychainError.denied),
+            (errSecUserCanceled, IsolatedKeychainError.cancelled),
+            (errSecInteractionNotAllowed, IsolatedKeychainError.locked),
+            (OSStatus(-4), IsolatedKeychainError.operatingSystem(-4))
+        ]
+    )
+    func isolatedKeychainMapsSecurityFailures(status: OSStatus, expected: IsolatedKeychainError) {
+        let adapter = IsolatedKeychainAdapter.testing(status: status)
+
+        #expect(throws: expected) { try adapter.read() }
+    }
+
+    @Test("Isolated Keychain adapter rejects ambiguous and corrupt native results")
+    func isolatedKeychainRejectsAmbiguousAndCorruptResults() {
+        let ambiguous = IsolatedKeychainAdapter.testing(result: [Data([1]), Data([2])] as CFArray)
+        let corrupt = IsolatedKeychainAdapter.testing(result: "not-a-reference" as CFString)
+
+        #expect(throws: IsolatedKeychainError.ambiguous) { try ambiguous.read() }
+        #expect(throws: IsolatedKeychainError.corrupt) { try corrupt.read() }
+    }
+
+    @Test(
+        "Opt-in isolated native Keychain CRUD preserves attributes and cleans up",
+        .enabled(if: ProcessInfo.processInfo.environment["AI_CONTROL_KEYCHAIN_TEST_ROOT"] != nil)
+    )
+    func optInIsolatedNativeKeychainCRUD() throws {
+        let root = try #require(ProcessInfo.processInfo.environment["AI_CONTROL_KEYCHAIN_TEST_ROOT"])
+        let directory = URL(fileURLWithPath: root, isDirectory: true)
+            .appendingPathComponent("ai-control-keychain-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let path = directory.appendingPathComponent("isolated.keychain-db").path
+        let password = UUID().uuidString
+        var keychain: SecKeychain?
+        var originalSearchList: CFArray?
+        #expect(SecKeychainCopySearchList(&originalSearchList) == errSecSuccess)
+        let originalKeychains = try #require(originalSearchList as? [SecKeychain])
+        defer {
+            if let isolated = keychain {
+                #expect(IsolatedKeychainAdapter.removeFromSearchList(isolated))
+                #expect(SecKeychainDelete(isolated) == errSecSuccess)
+            }
+            try? FileManager.default.removeItem(at: directory)
+            #expect(FileManager.default.fileExists(atPath: path) == false)
+        }
+        let createStatus = password.withCString {
+            SecKeychainCreate(path, UInt32(strlen($0)), $0, false, nil, &keychain)
+        }
+        #expect(createStatus == errSecSuccess)
+        let isolated = try #require(keychain)
+        #expect(IsolatedKeychainAdapter.removeFromSearchList(isolated))
+        var detachedSearchList: CFArray?
+        #expect(SecKeychainCopySearchList(&detachedSearchList) == errSecSuccess)
+        let detachedKeychains = try #require(detachedSearchList as? [SecKeychain])
+        #expect(sameKeychainList(originalKeychains, detachedKeychains))
+        let service = "AIControl-claude-logins.v1.test-\(UUID().uuidString)"
+        let account = "synthetic-account"
+        let adapter = IsolatedKeychainAdapter(keychain: isolated, service: service, account: account)
+
+        try adapter.create(data: Data("SYNTHETIC-INITIAL".utf8))
+        #expect(try adapter.read() == Data("SYNTHETIC-INITIAL".utf8))
+        let exactQuery: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword, kSecAttrService: service,
+            kSecAttrAccount: account, kSecMatchSearchList: [isolated]
+        ]
+        #expect(SecItemUpdate(
+            exactQuery as CFDictionary,
+            [kSecAttrLabel: "preserve-sentinel"] as CFDictionary
+        ) == errSecSuccess)
+        try adapter.update(data: Data("SYNTHETIC-UPDATED".utf8))
+        #expect(try adapter.read() == Data("SYNTHETIC-UPDATED".utf8))
+        var attributeResult: CFTypeRef?
+        var attributeQuery = exactQuery
+        attributeQuery[kSecReturnAttributes] = true
+        #expect(SecItemCopyMatching(attributeQuery as CFDictionary, &attributeResult) == errSecSuccess)
+        #expect((attributeResult as? [CFString: Any])?[kSecAttrLabel] as? String == "preserve-sentinel")
+        try adapter.delete()
+        #expect(throws: IsolatedKeychainError.missing) { try adapter.read() }
+    }
+}
+
+private extension IsolatedKeychainAdapter {
+    static func testing(status: OSStatus = errSecSuccess, result: CFTypeRef? = nil) -> Self {
+        let calls = KeychainNativeCalls(
+            copy: { _, output in output?.pointee = result; return status },
+            add: { _ in status }, update: { _, _ in status }, delete: { _ in status }
+        )
+        return .init(
+            keychain: NSObject(), service: "AIControl-claude-logins.v1.test-unit",
+            account: "synthetic-account", calls: calls
+        )
+    }
+}
+
+private func sameKeychainList(_ lhs: [SecKeychain], _ rhs: [SecKeychain]) -> Bool {
+    lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { CFEqual($0, $1) }
 }
