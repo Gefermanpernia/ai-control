@@ -1,0 +1,52 @@
+schema: spec-driven
+
+context: |
+  Workspace: single Swift Package Manager project at repository root.
+  Product: macOS 13+ menu-bar application with an executable and AIControlCore library.
+  Architecture: SwiftUI presentation backed by the @MainActor ControlStore state model.
+  Data mode: deterministic mock account data; no credentials are read or stored.
+  Testing: Swift Testing framework through the repository test script.
+  Quality tooling: no configured linter, formatter, or separate type-check command detected.
+
+strict_tdd: true
+
+testing:
+  workspace_test_command: ./scripts/test
+  projects:
+    - path: .
+      stack: Swift 6.3.3 / Swift Package Manager (tools 5.7), SwiftUI, macOS 13+
+      test_command: ./scripts/test
+      focused_test_command: ./scripts/test --filter ControlStoreTests
+      framework: Swift Testing
+      test_layers:
+        unit: Swift Testing @Test tests for ControlStore
+        integration: unavailable
+        e2e: unavailable
+      coverage_command: null
+      quality:
+        linter: null
+        type_checker: swift test
+        formatter: null
+
+rules:
+  proposal:
+    - State the affected provider, account-switching behavior, and rollback plan.
+  specs:
+    - Use RFC 2119 keywords and Given/When/Then scenarios.
+  design:
+    - Preserve the executable-to-library target boundary for testable logic.
+    - Document state, async, and credential-boundary implications.
+  tasks:
+    - Group tasks by phase and keep each task completable in one session.
+  apply:
+    guidelines:
+      - Follow existing SwiftUI and @MainActor ControlStore conventions.
+      - Keep mock-only behavior unless a change explicitly authorizes real provider integration.
+    tdd: true
+    test_command: ./scripts/test
+  verify:
+    test_command: ./scripts/test
+    build_command: ./scripts/test
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas.

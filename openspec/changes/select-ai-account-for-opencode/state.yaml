@@ -1,0 +1,120 @@
+schema: gentle-ai.sdd-preproposal/v1
+revision: 5
+change_name: select-ai-account-for-opencode
+artifact_store:
+  mode: hybrid
+  authoritative: openspec
+exploration:
+  outcome: done
+  references:
+    openspec:
+      path: openspec/changes/select-ai-account-for-opencode/exploration.md
+    engram:
+      topic_key: sdd/select-ai-account-for-opencode/explore
+      observation_id: 142
+      revision: 2
+research:
+  selected: true
+  request:
+    questions:
+      - Does the pinned plugin expose a stable non-secret selector for the main Claude context or one CCS context?
+      - Can AI Control change the active Claude identity without reading or writing token material?
+      - Does request handling remain bound to the selected identity through refresh and provider errors?
+      - Can ordinary manually launched OpenCode retain shared sessions, configuration, plugins, skills, and tooling?
+      - Can account usage be attributed reliably to the identity selected in AI Control?
+      - What security and operational behavior enters the plugin trust boundary?
+      - Is routing Claude subscription credentials from OpenCode through this plugin permitted by current Anthropic documentation?
+      - What supported product boundaries remain available?
+    source_classes:
+      - documentation
+      - open-web
+  admission:
+    capability_schema: gentle-ai.sdd-research-capability/v1
+    capability_schema_version: 1
+    requested_grants:
+      - documentation
+      - open-web
+    observed_grants:
+      - documentation
+      - open-web
+    denied_grants: []
+    result: admitted
+  outcome: done
+  evidence_references:
+    openspec:
+      path: openspec/changes/select-ai-account-for-opencode/research.md
+      revision: 4
+      sha256: 1764efb8644b6d650eff67a31df6ad4b75e088aa85e5c365ba3e229213ff1b4c
+    engram:
+      topic_key: sdd/select-ai-account-for-opencode/research
+      observation_id: 7747
+      revision: 4
+    parity:
+      revision_equal: true
+      bytes_equal: true
+      verified_at: 2026-09-04T17:11:54Z
+product_decisions:
+  status: blocked
+  items:
+    - id: provider-scope
+      status: decided
+      decision: Keep OpenAI deferred; this research applies only to Claude and must not be generalized across providers.
+    - id: credential-boundary
+      status: decided
+      decision: AI Control remains credential-blind and may persist only non-secret selection state.
+    - id: stock-plugin-selector
+      status: rejected
+      decision: Stock opencode-anthropic-login-via-cli 1.6.1 cannot implement strict account selection because it consumes no stable selector and may fall back to another identity.
+    - id: subscription-routing
+      status: blocked
+      decision: Do not propose or implement third-party routing of Claude Free, Pro, or Max credentials without written Anthropic authorization.
+    - id: supported-boundary
+      status: unresolved
+      decision: Product discovery must choose Anthropic API-key authentication, unmodified Claude Code, or a documented authorization exception.
+superseded_decisions:
+  - id: startup-adapter
+    reason: A PATH adapter or plugin fork cannot cure the Anthropic policy conflict and is no longer proposal-ready work.
+  - id: auth-override-gate
+    reason: An auth-only override may be technically useful but does not establish authorization to route subscription credentials.
+  - id: anthropic-stability-spike
+    reason: Selector-bound fallback remains technically necessary only if a supported or explicitly authorized integration boundary is selected.
+proposal_constraints:
+  - AI Control never reads, copies, mutates, refreshes, exposes, or logs credential values.
+  - No implementation may disguise OpenCode as Claude Code or bypass provider classification or protective measures.
+  - Claude subscription credentials may be used only through a boundary explicitly permitted by current Anthropic documentation or written authorization.
+  - OpenCode sessions, projects, configuration, plugins, skills, Gentle AI integration, cache, state, logs, MCP auth, worktrees, snapshots, plans, and tool output remain shared unless a later supported design proves otherwise.
+  - Unknown OpenCode or provider-plugin versions fail closed.
+downstream:
+  proposal:
+    status: stale
+    action: preserve
+    reason: The existing proposal predates the Claude-only scope and current Anthropic policy evidence.
+  specifications:
+    status: stale
+    action: preserve
+    reason: Existing requirements assume a credential-routing architecture that is not proposal-ready.
+  design:
+    status: stale
+    action: preserve
+    reason: The existing auth-binder and PATH-adapter design is superseded by the policy gate.
+  tasks:
+    status: blocked
+    reason: No implementation tasks may be created before a supported product boundary is selected and reproposed.
+  apply:
+    status: blocked
+    reason: Implementation would operationalize an architecture prohibited by current published guidance.
+  verify:
+    status: blocked
+    reason: There is no authorized implementation scope to verify.
+  archive:
+    status: blocked
+    reason: The change remains open for product discovery.
+proposal_ready: false
+production_ready: false
+blocked_reasons:
+  - Anthropic's current Claude Code legal and compliance guidance prohibits third-party developers from routing requests through Free, Pro, or Max credentials.
+  - The pinned plugin rewrites OpenCode identity and classifier-visible request details instead of running the unmodified Claude Code binary.
+  - Stock plugin 1.6.1 exposes no stable non-secret runtime context selector.
+  - Plugin refresh and selected error recovery can replace the selected identity with another discovered credential.
+  - Stable identity-aligned usage attribution is unavailable.
+next_recommended: sdd-explore

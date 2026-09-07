@@ -1,0 +1,101 @@
+schema: gentle-ai.sdd-preproposal/v1
+change: select-claude-code-account
+revision: 3
+updated_at: 2026-09-04
+phase: research
+artifact_store:
+  mode: hybrid
+  authority: openspec
+  ready: true
+  parity:
+    status: verified
+    required: equal-revision-and-bytes
+exploration:
+  outcome: done
+  references:
+    openspec:
+      path: openspec/changes/select-claude-code-account/exploration.md
+      sha256: eed30becc8d3cc1106be98f768638e60633d0fa117852cae9120b7fc0de656d2
+    engram:
+      topic_key: sdd/select-claude-code-account/explore
+      observation_id: 7790
+research:
+  selected: true
+  request:
+    questions:
+      - Q1
+      - Q2
+      - Q3
+      - Q4
+      - Q5
+      - Q6
+      - Q7
+      - Q8
+    requested_source_classes:
+      - documentation
+      - open-web
+  capability:
+    schema: gentle-ai.sdd-research-capability/v1
+    declaration_supplied: true
+    admitted_grants:
+      - documentation
+      - open-web
+    denied_grants: []
+  outcome: done
+  references:
+    openspec:
+      path: openspec/changes/select-claude-code-account/research.md
+      revision: 3
+      sha256: 9fa34d92d0337948c9114099a8d6491e2bed82c2acb72d395bd972ab61435abb
+    engram:
+      topic_key: sdd/select-claude-code-account/research
+      observation_id: 7794
+      revision: 3
+      sha256: 9fa34d92d0337948c9114099a8d6491e2bed82c2acb72d395bd972ab61435abb
+  evidence:
+    valid: true
+    questions_mapped: 8
+    questions_total: 8
+    unsupported_guarantees_admitted: false
+product_decisions:
+  status: pending
+  items:
+    - id: context-semantics
+      status: pending
+      question: >-
+        Should the product promise only a named Claude configuration context,
+        without claiming a verified Anthropic account identity?
+    - id: credential-precedence
+      status: pending
+      question: >-
+        Should the trust boundary remain limited to CLAUDE_CONFIG_DIR, accepting
+        that inherited higher-precedence credentials can defeat exclusive binding,
+        or may the adapter reject or sanitize those variables?
+    - id: usage-scope
+      status: pending
+      question: >-
+        Should account-level usage remain unavailable until Anthropic exposes a
+        stable payload that binds usage freshness to verified identity?
+    - id: continuity
+      status: pending
+      question: >-
+        Should session and history continuity be promised only within one selected
+        configuration root, with no cross-context resume promise?
+    - id: launcher-support
+      status: pending
+      question: >-
+        Should the first release support only Anthropic's native launcher, or
+        require explicit absolute-path registration for other installers?
+    - id: version-policy
+      status: pending
+      question: >-
+        Which allowlisted Claude Code versions should be supported, with all
+        missing, malformed, older, and unreviewed versions rejected?
+proposal_ready: false
+blocking_reasons:
+  - product-decisions-pending
+  - no-exclusive-config-root-to-account-binding
+  - no-stable-machine-readable-account-identity
+  - no-guaranteed-stale-selector-no-fallback-check
+  - no-identity-bound-fresh-usage-payload
+next_recommended: orchestrator-product-discovery

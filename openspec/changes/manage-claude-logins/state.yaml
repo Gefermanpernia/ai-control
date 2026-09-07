@@ -1,0 +1,162 @@
+schema: gentle-ai.sdd-preproposal/v1
+revision: 7
+project: ai-control
+change: manage-claude-logins
+native_authority: openspec
+planningHome: repo-local openspec
+artifact_store:
+  mode: openspec
+  user_selection: openspec_only
+  openspec: openspec/changes/manage-claude-logins/state.yaml
+  engram_topic: sdd/manage-claude-logins/preproposal
+  engram_role: historical_non_authoritative
+  required_mirrors: false
+exploration:
+  outcome: done
+  references:
+    openspec: openspec/changes/manage-claude-logins/exploration.md
+    engram_topic: sdd/manage-claude-logins/explore
+    engram_observation_id: 7846
+    engram_role: historical_non_authoritative
+research:
+  selection: selected
+  awaiting: null
+  request: Research Q1-Q4 for Claude Code 2.1.252 credential storage, preservation-safe snapshots, lifecycle, and minimal recoverable local switching before proposal.
+  proposed_source_classes:
+    - public_documentation
+    - public_static_implementation_or_package_evidence
+  selected_source_classes: [documentation, open-web]
+  admission:
+    schema: gentle-ai.sdd-research-capability/v1
+    status: admitted
+    admitted_grants: [documentation, open-web]
+    observed_exact_grants: [documentation, open-web]
+    documentation_tools: [context7_resolve-library-id, context7_query-docs, webfetch]
+    open_web_tools: [webfetch, playwright_browser_navigate, playwright_browser_evaluate]
+  outcome: done
+  evidence_references:
+    openspec:
+      - path: openspec/changes/manage-claude-logins/research.md
+        revision: 3
+    engram:
+      - topic: sdd/manage-claude-logins/research
+        observation_id: 7848
+        revision: 2
+        role: historical_non_authoritative
+  validated_claims: [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10]
+  access_boundary: Public read-only sources only; no local credential/config reads, authenticated APIs, synthetic login accounts, auth commands, or credential mutation.
+product_decisions:
+  status: confirmed
+  scope:
+    - Manage exactly two user-owned Claude logins.
+    - Select the active account from the terminal.
+    - Keep one shared main configuration, history, skills, and plugins.
+  exclusions:
+    - Separate CLAUDE_CONFIG_DIR contexts.
+    - GUI expansion.
+    - Usage metrics.
+    - OpenCode or OpenAI bridge.
+technical_context:
+  claude_version: 2.1.252
+  version_verification: Installed version/path reported by the parent; official 2.1.252 ARM binary independently fetched as public data and SHA-256 verified, not executed.
+  exact_credential_storage_compatibility: exact_arm_static_contract_verified_runtime_unverified
+  recommendations_not_user_selections:
+    - Switch accounts only while Claude processes are stopped.
+    - Use Keychain snapshots if compatibility verification supports that approach.
+  implementation_gate: Verify exact credential-storage compatibility before writing real credentials.
+  remaining_acceptance_gates: [G1, G2, G3, G4, G5]
+  source_binary_sha256: b661c6a094fcc32656bf7c0071c5b45bf900b34d4f0a1ab3d78fd59aeba2c2c7
+pending_choice:
+  status: ANSWERED
+  answer_application_count: 1
+  answer_recorded_at_revision: 2
+  answer_provenance: Explicit user answer relayed by the parent for this execution.
+  language: es
+  reason: 'La exploración está completa; falta comprobar qué credenciales y metadatos hay que cambiar en Claude 2.1.252. Esto decide cuándo reunir esa evidencia, no si el cambio es posible.'
+  groups:
+    - id: research_timing
+      type: single_select
+      question: '¿Querés investigar ahora los detalles de almacenamiento del login, o avanzar con la propuesta y verificarlos antes de implementar?'
+      domain: [research_now, proposal_first]
+      allowed_answers: [research_now, proposal_first]
+      answer: research_now
+      options:
+        - token: research_now
+          label: 'Investigar ahora'
+          effect: 'Investigar fuentes públicas, incluido código de implementaciones existentes, sin acceder a tus credenciales. La investigación deberá completarse antes de la propuesta.'
+        - token: proposal_first
+          label: 'Propuesta primero'
+          effect: 'Avanzar con el alcance ya confirmado. La compatibilidad con tu versión seguirá pendiente y habrá que verificarla antes de escribir credenciales reales.'
+  pending_is_not_declined_research_or_consent: true
+session_preferences:
+  mode: automatic
+  artifact_store: openspec
+  native_authority: openspec
+  auto_chain: true
+  delivery_strategy: auto-chain
+  changed_line_budget: 400
+  chain_strategy: stacked-to-main
+authorizations:
+  commits: false
+  push: false
+  pull_requests: false
+  live_credential_access: false
+  live_credential_writes: false
+persistence_decision:
+  status: ANSWERED
+  answer: openspec_only
+  answer_application_count: 1
+  answer_recorded_at_revision: 5
+  answer_provenance: Explicit user selection to continue with OpenSpec, relayed by the parent for this execution.
+  previous_mode: hybrid
+  current_mode: openspec
+  effect: OpenSpec is the current required store; existing Engram artifact memories remain untouched historical, non-authoritative snapshots.
+  authorization_boundary: Persistence choice only; no implied live credential access or writes, commits, push, or pull requests.
+reference_verification:
+  store: openspec
+  research:
+    path: openspec/changes/manage-claude-logins/research.md
+    revision: 3
+    outcome: done
+    readback: verified
+    substantive_evidence_and_gates: Preserved source references, V1-V10, binary SHA-256, and G1-G5.
+  exploration:
+    path: openspec/changes/manage-claude-logins/exploration.md
+    readback: verified
+  historical_engram_readback_required: false
+proposal_ready: true
+proposal_blockers: []
+hybrid_reconciliation:
+  retained_intent: Available; explicit research_now selection and full canonical evidence retained in this execution.
+  reason: Final LF is retained by the permitted patch writer and removed by Engram save/update; an explicit no-final-newline patch marker did not remove it.
+  recovery_research_revision: 2
+  recovery_state_revision: 4
+  status: resolved_by_store_choice
+  historical_status: blocked_byte_divergence
+  resolved_at_revision: 5
+  resolution: Explicit openspec_only selection removes required hybrid parity; the historical final-LF mismatch remains unequal bytes, not byte recovery or normalized equality.
+  required_recovery: none_for_current_openspec_mode
+unit_3_scope_decision:
+  status: ANSWERED
+  answer: 'Dividir en dos'
+  answer_recorded_at_revision: 6
+  answer_provenance: Explicit human answer relayed by the parent; approved new scope, not automatic partition iteration.
+  supersedes: Earlier U3-only 800-line exception; U3A and U3B each have a 400-line budget including metadata/evidence.
+  task_map: {U3A: '3.1–3.3', U3B: '3.4–3.6'}
+  first_boundary: Isolated native Keychain adapter/tests only; production backend remains unavailable.
+  second_boundary: Guarded config preservation, permissions, atomic writes, locking, routing, process guards, and manager integration/tests.
+  authorization_boundary: Existing G2 consent covers only explicitly opt-in temporary isolated Keychain and fictitious AIControl-claude-logins.v1.test-* CRUD/readback/cleanup for this phase; no actual Claude credentials or live G5.
+  activation_gate: No live production activation until protections are complete; native ACL/denied evidence is distinct from fake coverage and CRUD alone does not complete G2.
+  forecast: U3A estimated 240–360 total lines, not measured; U3B target within 400 remains uncertain and not yet defensible.
+unit_3b_planning_decision:
+  status: ANSWERED
+  answer: 'Replantear con 400 líneas'
+  answer_recorded_at_revision: 7
+  answer_provenance: Explicit human authorization for one new bounded planning pass; not repeated automatic slicing.
+  supersedes: Only the remaining U3B boundary/forecast in revision 6; earlier answered decisions remain historical, with no 800-line exception.
+  task_map: {U3B1: '3.4–3.6', U3B2: '3.7–3.9', U3B3: '3.10–3.12'}
+  budget: Each unit remains at 400 additions plus deletions including tests/evidence; this planning diff belongs to U3B1. Forecasts and allowances are in tasks.md, not measured totals.
+  boundary: File persistence first, lock/routing/process guards second, validated envelope/custody/backend composition third; production unavailable until all protections are complete and verified, no live credential or G5 authorization.
+  checkpoint_policy: Finalize planning before future acquire; these decisions and prior evidence references are historical planning snapshots, not a runtime counter/token store.
+  review_disposition: Parent confirms U1 approved and U2/U3A explicitly omitted, not approved; do not overwrite historical apply-progress proof.
+next_action: Parent may prepare U3B1 tasks 3.4–3.6 under the finalized 400-line scope before future acquire; preserve research revision 3 and G1–G5. This planning pass launches no implementation, tests, or native operations.
