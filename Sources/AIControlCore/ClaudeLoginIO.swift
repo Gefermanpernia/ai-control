@@ -321,3 +321,221 @@ struct ProtectedConfigurationFile {
             (lhs.st_mode & 0o7777) == (rhs.st_mode & 0o7777)
     }
 }
+
+enum ManagerFileLockError: Error, Equatable {
+    case unsafeDirectory
+    case unsafeFile
+    case contended
+    case systemFailure
+}
+
+final class ManagerFileLock {
+    private var descriptor: Int32
+
+    private init(descriptor: Int32) { self.descriptor = descriptor }
+
+    static func acquire(directory: String, expectedOwner: uid_t = geteuid()) throws -> ManagerFileLock {
+        if mkdir(directory, 0o700) != 0 && errno != EEXIST {
+            throw ManagerFileLockError.systemFailure
+        }
+        var pathMetadata = stat()
+        guard lstat(directory, &pathMetadata) == 0,
+              (pathMetadata.st_mode & S_IFMT) == S_IFDIR,
+              pathMetadata.st_uid == expectedOwner,
+              (pathMetadata.st_mode & 0o777) == 0o700 else {
+            throw ManagerFileLockError.unsafeDirectory
+        }
+        let directoryDescriptor = open(directory, O_RDONLY | O_NOFOLLOW)
+        guard directoryDescriptor >= 0 else { throw ManagerFileLockError.unsafeDirectory }
+        defer { close(directoryDescriptor) }
+        var directoryMetadata = stat()
+        guard fstat(directoryDescriptor, &directoryMetadata) == 0,
+              directoryMetadata.st_dev == pathMetadata.st_dev,
+              directoryMetadata.st_ino == pathMetadata.st_ino,
+              directoryMetadata.st_uid == expectedOwner,
+              (directoryMetadata.st_mode & 0o777) == 0o700 else {
+            throw ManagerFileLockError.unsafeDirectory
+        }
+
+        let name = "claude-login.lock"
+        var prior = stat()
+        let existed = fstatat(directoryDescriptor, name, &prior, AT_SYMLINK_NOFOLLOW) == 0
+        if !existed && errno != ENOENT { throw ManagerFileLockError.systemFailure }
+        if existed && (prior.st_mode & S_IFMT) != S_IFREG { throw ManagerFileLockError.unsafeFile }
+        let fileDescriptor = openat(directoryDescriptor, name, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
+        guard fileDescriptor >= 0 else { throw ManagerFileLockError.unsafeFile }
+        var fileMetadata = stat()
+        guard fstat(fileDescriptor, &fileMetadata) == 0,
+              (!existed || (fileMetadata.st_dev == prior.st_dev && fileMetadata.st_ino == prior.st_ino)),
+              (fileMetadata.st_mode & S_IFMT) == S_IFREG,
+              fileMetadata.st_uid == expectedOwner,
+              (fileMetadata.st_mode & 0o777) == 0o600 else {
+            close(fileDescriptor)
+            throw ManagerFileLockError.unsafeFile
+        }
+        guard flock(fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let failure = errno
+            close(fileDescriptor)
+            if failure == EWOULDBLOCK || failure == EAGAIN { throw ManagerFileLockError.contended }
+            throw ManagerFileLockError.systemFailure
+        }
+        return ManagerFileLock(descriptor: fileDescriptor)
+    }
+
+    func release() {
+        guard descriptor >= 0 else { return }
+        _ = flock(descriptor, LOCK_UN)
+        close(descriptor)
+        descriptor = -1
+    }
+
+    deinit { release() }
+}
+
+enum ClaudeRoutingConflict: Hashable, Sendable {
+    case configurationOverride
+    case secureStorageOverride
+    case customOAuth
+    case plaintextFallback
+    case legacyStorage
+    case alternateAuthentication
+    case unsupportedProviderState
+}
+
+struct ClaudeRoutingEvidence: Sendable {
+    let version: String
+    let executableSHA256: String
+    let resolvedConfigurationPath: String
+    let defaultConfigurationPath: String
+    let environmentUser: String?
+    let operatingSystemUser: String?
+    let conflicts: Set<ClaudeRoutingConflict>
+}
+
+struct ClaudeStorageRoute: Equatable, Sendable {
+    let service: String
+    let account: String
+    let configurationPath: String
+}
+
+enum ClaudeRoutingError: Error, Equatable {
+    case unsupportedBuild
+    case unexpectedHash
+    case nonDefaultResolver
+    case conflictingSource
+}
+
+enum ClaudeRoutingValidator {
+    static let version = "2.1.252"
+    static let executableSHA256 = "b661c6a094fcc32656bf7c0071c5b45bf900b34d4f0a1ab3d78fd59aeba2c2c7"
+
+    static func route(_ evidence: ClaudeRoutingEvidence) throws -> ClaudeStorageRoute {
+        guard evidence.version == version else { throw ClaudeRoutingError.unsupportedBuild }
+        guard evidence.executableSHA256.lowercased() == executableSHA256 else {
+            throw ClaudeRoutingError.unexpectedHash
+        }
+        guard evidence.resolvedConfigurationPath == evidence.defaultConfigurationPath else {
+            throw ClaudeRoutingError.nonDefaultResolver
+        }
+        guard evidence.conflicts.isEmpty else { throw ClaudeRoutingError.conflictingSource }
+        let candidate = evidence.environmentUser ?? evidence.operatingSystemUser
+        let account = candidate?.range(of: #"^[a-zA-Z0-9._-]+$"#, options: .regularExpression) == nil
+            ? "claude-code-user" : candidate ?? "claude-code-user"
+        return .init(
+            service: "Claude Code-credentials",
+            account: account,
+            configurationPath: evidence.resolvedConfigurationPath
+        )
+    }
+}
+
+enum ClaudeProcessRole: CaseIterable, Sendable {
+    case terminal
+    case editor
+    case sdk
+    case daemon
+    case remoteControl
+}
+
+struct ClaudeProcessRecord: Equatable, Sendable {
+    let pid: pid_t
+    let parentPID: pid_t?
+    let uid: uid_t?
+    let executablePath: String?
+    let role: ClaudeProcessRole?
+}
+
+struct NativeProcessProbe {
+    let snapshot: () throws -> [ClaudeProcessRecord]
+
+    static func system(processIDs: @escaping () throws -> [pid_t] = {
+        let byteCount = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard byteCount > 0, byteCount <= 1 << 20 else { throw ClaudeProcessPreflightError.uncertain }
+        var pids = [pid_t](repeating: 0, count: Int(byteCount) / MemoryLayout<pid_t>.stride)
+        let copied = pids.withUnsafeMutableBytes {
+            proc_listpids(UInt32(PROC_ALL_PIDS), 0, $0.baseAddress, Int32($0.count))
+        }
+        guard copied > 0 else { throw ClaudeProcessPreflightError.uncertain }
+        return Array(pids.prefix(Int(copied) / MemoryLayout<pid_t>.stride))
+    }) -> Self {
+        .init(snapshot: {
+            try processIDs().filter { $0 > 0 }.map { pid in
+                var info = proc_bsdinfo()
+                var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+                guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info,
+                                   Int32(MemoryLayout<proc_bsdinfo>.size)) == MemoryLayout<proc_bsdinfo>.size,
+                      proc_pidpath(pid, &path, UInt32(path.count)) > 0 else {
+                    throw ClaudeProcessPreflightError.uncertain
+                }
+                return .init(pid: pid, parentPID: pid_t(info.pbi_ppid), uid: info.pbi_uid,
+                             executablePath: String(cString: path), role: nil)
+            }
+        })
+    }
+}
+
+enum ClaudeProcessPreflightError: Error, Equatable {
+    case active
+    case uncertain
+}
+
+struct ClaudeProcessPreflight {
+    let expectedUID: uid_t
+    let trustedExecutablePath: String
+    let probe: NativeProcessProbe
+
+    func requireQuiescent() throws {
+        let records: [ClaudeProcessRecord]
+        do { records = try probe.snapshot() } catch { throw ClaudeProcessPreflightError.uncertain }
+        var byPID: [pid_t: ClaudeProcessRecord] = [:]
+        for record in records {
+            guard record.pid > 0, record.parentPID.map({ $0 >= 0 }) ?? true,
+                  record.uid != nil, record.executablePath?.isEmpty == false,
+                  byPID.updateValue(record, forKey: record.pid) == nil else {
+                throw ClaudeProcessPreflightError.uncertain
+            }
+        }
+        for origin in records where origin.uid == expectedUID {
+            var current: ClaudeProcessRecord? = origin
+            var visited: Set<pid_t> = []
+            while let record = current {
+                guard visited.insert(record.pid).inserted else {
+                    throw ClaudeProcessPreflightError.uncertain
+                }
+                if record.role != nil || record.executablePath == trustedExecutablePath {
+                    throw ClaudeProcessPreflightError.active
+                }
+                guard let parent = record.parentPID, let ancestor = byPID[parent],
+                      ancestor.uid == expectedUID else { break }
+                current = ancestor
+            }
+        }
+    }
+
+    func performGuarded(write: () throws -> Void, verify: () throws -> Void) throws {
+        try requireQuiescent()
+        try write()
+        try verify()
+        try requireQuiescent()
+    }
+}

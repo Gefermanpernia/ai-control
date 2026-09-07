@@ -543,6 +543,127 @@ struct ClaudeLoginManagerTests {
         #expect(try String(contentsOf: after.file, encoding: .utf8) == #"{"oauthAccount":null}"#)
         #expect(try after.temporaryFiles().isEmpty)
     }
+
+    @Test("Manager lock serializes holders without replacing the lock inode")
+    func managerLockSerializesAndReleases() throws {
+        let directory = try disposableDirectory("lock")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try ManagerFileLock.acquire(directory: directory.path)
+        defer { first.release() }
+        let inode = try fileInode(directory.appendingPathComponent("claude-login.lock"))
+
+        #expect(throws: ManagerFileLockError.contended) {
+            try ManagerFileLock.acquire(directory: directory.path)
+        }
+        first.release()
+        let next = try ManagerFileLock.acquire(directory: directory.path)
+        #expect(try fileInode(directory.appendingPathComponent("claude-login.lock")) == inode)
+        next.release()
+    }
+
+    @Test("Manager lock rejects unsafe directory and lock-file protections")
+    func managerLockRejectsUnsafePaths() throws {
+        let directory = try disposableDirectory("unsafe-lock")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        chmod(directory.path, 0o755)
+        #expect(throws: ManagerFileLockError.unsafeDirectory) {
+            try ManagerFileLock.acquire(directory: directory.path)
+        }
+        chmod(directory.path, 0o700)
+        let target = directory.appendingPathComponent("target")
+        try Data().write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("claude-login.lock"), withDestinationURL: target
+        )
+        #expect(throws: ManagerFileLockError.unsafeFile) {
+            try ManagerFileLock.acquire(directory: directory.path)
+        }
+    }
+
+    @Test("W5 routing derives the exact default service and OS account")
+    func routingAcceptsOnlyVerifiedDefaults() throws {
+        let base = ClaudeRoutingEvidence.testing(environmentUser: "fixture-user")
+        #expect(try ClaudeRoutingValidator.route(base) == .init(
+            service: "Claude Code-credentials", account: "fixture-user",
+            configurationPath: "/synthetic/home/.claude.json"
+        ))
+        #expect(try ClaudeRoutingValidator.route(.testing(environmentUser: nil)).account == "os-fixture")
+        #expect(try ClaudeRoutingValidator.route(.testing(environmentUser: "bad user")).account == "claude-code-user")
+    }
+
+    @Test("W5 routing fails closed on unsupported evidence", arguments: RoutingRejection.cases)
+    func routingRejectsUnsupportedEvidence(_ rejection: RoutingRejection) {
+        #expect(throws: rejection.error) { try ClaudeRoutingValidator.route(rejection.evidence) }
+    }
+
+    @Test("Process preflight blocks every same-user Claude host role", arguments: ClaudeProcessRole.allCases)
+    func processPreflightBlocksActiveRoles(_ role: ClaudeProcessRole) {
+        let process = ClaudeProcessRecord(
+            pid: 20, parentPID: 1, uid: 501, executablePath: "/synthetic/host", role: role
+        )
+        var wrote = false
+        #expect(throws: ClaudeProcessPreflightError.active) {
+            try ClaudeProcessPreflight.testing([process]).performGuarded(
+                write: { wrote = true }, verify: {}
+            )
+        }
+        #expect(!wrote)
+    }
+
+    @Test("Process preflight permits other users and checks before write and after verification")
+    func processPreflightEnforcesCallingContract() throws {
+        var probes = 0
+        var phases: [String] = []
+        let preflight = ClaudeProcessPreflight(
+            expectedUID: 501, trustedExecutablePath: "/synthetic/claude",
+            probe: .init(snapshot: { probes += 1; return [
+                .init(pid: 30, parentPID: 1, uid: 502, executablePath: "/synthetic/claude", role: .daemon)
+            ] })
+        )
+        try preflight.performGuarded(
+            write: { phases.append("write") }, verify: { phases.append("verify") }
+        )
+        #expect(probes == 2)
+        #expect(phases == ["write", "verify"])
+        #expect(throws: ClaudeProcessPreflightError.active) {
+            try ClaudeProcessPreflight.testing([
+                .init(pid: 31, parentPID: 1, uid: 501, executablePath: "/synthetic/claude", role: nil)
+            ]).requireQuiescent()
+        }
+    }
+
+    @Test("Process preflight treats incomplete and cyclic observations as uncertain", arguments: processUncertaintyCases)
+    func processPreflightRejectsUncertainty(_ records: [ClaudeProcessRecord]) {
+        #expect(throws: ClaudeProcessPreflightError.uncertain) {
+            try ClaudeProcessPreflight.testing(records).requireQuiescent()
+        }
+    }
+
+    @Test("Native process probe reads a supplied self PID")
+    func nativeProcessProbeReadsSuppliedSelfPID() throws {
+        let probe = NativeProcessProbe.system(processIDs: { [getpid()] })
+
+        let records = try probe.snapshot()
+        let record = try #require(records.first)
+        let executablePath = try #require(record.executablePath)
+        #expect(records.count == 1)
+        #expect(record.pid == getpid())
+        #expect(record.uid == geteuid())
+        #expect(record.parentPID != nil)
+        #expect(executablePath.isEmpty == false)
+        #expect(throws: ClaudeProcessPreflightError.active) {
+            try ClaudeProcessPreflight(expectedUID: geteuid(), trustedExecutablePath: executablePath, probe: probe)
+                .requireQuiescent()
+        }
+    }
+
+    @Test("Native process probe fails closed for an unavailable PID")
+    func nativeProcessProbeRejectsUnavailablePID() {
+        let probe = NativeProcessProbe.system(processIDs: { [Int32.max] })
+
+        #expect(throws: ClaudeProcessPreflightError.uncertain) { try probe.snapshot() }
+    }
 }
 
 private extension IsolatedKeychainAdapter {
@@ -607,5 +728,67 @@ private final class ConfigurationFixture {
     func temporaryFiles() throws -> [URL] {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix(".aicontrol-") }
+    }
+}
+
+private func disposableDirectory(_ prefix: String) throws -> URL {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("opencode", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root.appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+}
+
+private func fileInode(_ file: URL) throws -> ino_t {
+    var value = stat()
+    guard lstat(file.path, &value) == 0 else { throw FixtureError() }
+    return value.st_ino
+}
+
+private extension ClaudeRoutingEvidence {
+    static func testing(
+        version: String = "2.1.252",
+        hash: String = "b661c6a094fcc32656bf7c0071c5b45bf900b34d4f0a1ab3d78fd59aeba2c2c7",
+        path: String = "/synthetic/home/.claude.json",
+        environmentUser: String? = "fixture-user",
+        conflicts: Set<ClaudeRoutingConflict> = []
+    ) -> Self {
+        .init(
+            version: version, executableSHA256: hash, resolvedConfigurationPath: path,
+            defaultConfigurationPath: "/synthetic/home/.claude.json", environmentUser: environmentUser,
+            operatingSystemUser: "os-fixture", conflicts: conflicts
+        )
+    }
+}
+
+struct RoutingRejection: Sendable {
+    let evidence: ClaudeRoutingEvidence
+    let error: ClaudeRoutingError
+    static let cases: [Self] = [
+        .init(evidence: .testing(version: "2.1.253"), error: .unsupportedBuild),
+        .init(evidence: .testing(hash: "synthetic-wrong-hash"), error: .unexpectedHash),
+        .init(evidence: .testing(path: "/synthetic/alternate/.claude.json"), error: .nonDefaultResolver),
+        .init(evidence: .testing(conflicts: [.configurationOverride]), error: .conflictingSource),
+        .init(evidence: .testing(conflicts: [.secureStorageOverride]), error: .conflictingSource),
+        .init(evidence: .testing(conflicts: [.customOAuth]), error: .conflictingSource),
+        .init(evidence: .testing(conflicts: [.plaintextFallback]), error: .conflictingSource),
+        .init(evidence: .testing(conflicts: [.legacyStorage]), error: .conflictingSource),
+        .init(evidence: .testing(conflicts: [.alternateAuthentication]), error: .conflictingSource),
+        .init(evidence: .testing(conflicts: [.unsupportedProviderState]), error: .conflictingSource)
+    ]
+}
+
+let processUncertaintyCases: [[ClaudeProcessRecord]] = [
+    [.init(pid: 40, parentPID: 1, uid: nil, executablePath: nil, role: nil)],
+    [.init(pid: 40, parentPID: 1, uid: 501, executablePath: "/synthetic/a", role: nil),
+     .init(pid: 40, parentPID: 1, uid: 501, executablePath: "/synthetic/b", role: nil)],
+    [.init(pid: 40, parentPID: 41, uid: 501, executablePath: "/synthetic/a", role: nil),
+     .init(pid: 41, parentPID: 40, uid: 501, executablePath: "/synthetic/b", role: nil)]
+]
+
+private extension ClaudeProcessPreflight {
+    static func testing(_ records: [ClaudeProcessRecord]) -> Self {
+        .init(
+            expectedUID: 501, trustedExecutablePath: "/synthetic/claude",
+            probe: .init(snapshot: { records })
+        )
     }
 }
