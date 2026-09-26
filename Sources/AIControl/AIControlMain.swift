@@ -7,6 +7,8 @@ import Darwin
 enum AIControlMain {
     @MainActor
     static func main() {
-        exit(runClaudeLogins(arguments: Array(CommandLine.arguments.dropFirst())))
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 2, arguments[0] == "render-screenshots" { exit(renderScreenshots(to: arguments[1])) }
+        exit(runClaudeLogins(arguments: arguments))
     }
 }

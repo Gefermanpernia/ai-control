@@ -153,8 +153,38 @@ final class ControlStore: ObservableObject {
         }
     }
     private var lastOpened: Date?
+    private var isDemo = false
+
+    /// Example accounts for screenshots; a demo store never loads or changes real logins.
+    static func demo(now: Date = Date()) -> ControlStore {
+        let store = ControlStore()
+        store.isDemo = true
+        func usage(_ windows: [(String, Double, Double)], resets: Int? = nil) -> LoginUsageResult {
+            .usage(.init(windows: windows.map { .init(label: $0.0, usedPercent: $0.1, resetsAt: now.addingTimeInterval($0.2 * 3600)) },
+                         resetsAvailable: resets, fetchedAt: now))
+        }
+        store.claudeLogins = .loaded(.init(aliases: [
+            .init(name: "client", requiresReLogin: false), .init(name: "personal", requiresReLogin: false),
+            .init(name: "work", requiresReLogin: false)
+        ], lastSelectedHint: "work"))
+        store.claudeUsage = [
+            "client": usage([("5h", 91, 1.5), ("Week", 74, 50)]),
+            "personal": usage([("5h", 8, 3), ("Week", 21, 100)]),
+            "work": usage([("5h", 42, 2), ("Week", 63, 75)])
+        ]
+        store.codexLogins = .loaded(.init(logins: [
+            .init(name: "personal", email: "personal@example.com"), .init(name: "work", email: "work@example.com")
+        ], inUse: "work"))
+        store.codexUsage = [
+            "personal": usage([("Week", 4, 140)], resets: 3),
+            "work": usage([("5h", 12, 4), ("Week", 35, 90)], resets: 2)
+        ]
+        return store
+    }
+
     /// Loads saved logins and their usage when the window opens; usage is never fetched in the background.
     func windowOpened(now: Date = Date()) {
+        guard !isDemo else { return }
         reloadClaudeLogins()
         reloadCodexLogins()
         if let lastOpened, now.timeIntervalSince(lastOpened) < 30 { return }
@@ -307,10 +337,13 @@ struct ControlView: View {
 
     @EnvironmentObject private var store: ControlStore
     @State private var adding: CLIProvider?
+
+    init(adding: CLIProvider? = nil) { _adding = State(initialValue: adding) }
     @State private var newName = ""
     @State private var newEmail = ""
     @State private var renaming: RenameTarget?
     @State private var renameDraft = ""
+    @State private var contentHeight: CGFloat = 360
 
     var body: some View {
         VStack(spacing: 0) {
@@ -378,9 +411,11 @@ struct ControlView: View {
                 }
             }
             .padding(12)
+            .background(GeometryReader { Color.clear.preference(key: ContentHeightKey.self, value: $0.size.height) })
         }
-        // A menu-bar window sizes to ideal height; without one the list can open collapsed.
-        .frame(minHeight: 360, idealHeight: 440, maxHeight: 600)
+        // The window fits its content up to a limit; beyond it the list scrolls.
+        .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+        .frame(height: min(max(contentHeight, 160), 720))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("CLI accounts")
     }
@@ -634,6 +669,11 @@ struct ControlView: View {
     }
 }
 
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct SavedLoginRow: View {
     private static let time: DateFormatter = {
         let formatter = DateFormatter()
@@ -719,11 +759,19 @@ extension SavedLoginRow {
             Text("\(window.label) \(Int(window.usedPercent.rounded()))%\(Self.reset(window.resetsAt))")
                 .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.85)
-            ProgressView(value: min(window.usedPercent, 100), total: 100)
-                .progressViewStyle(.linear)
-                .tint(window.usedPercent >= 90 ? .red : window.usedPercent >= 70 ? .orange : .accentColor)
-                .accessibilityLabel(Text("\(window.label) usage"))
-                .accessibilityValue(Text("\(Int(window.usedPercent.rounded())) percent"))
+            // A drawn bar keeps its color when the menu is not the key window, unlike the native indicator.
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.2))
+                    Capsule()
+                        .fill(window.usedPercent >= 90 ? Color.red : window.usedPercent >= 70 ? Color.orange : Color.accentColor)
+                        .frame(width: max(4, proxy.size.width * min(window.usedPercent, 100) / 100))
+                }
+            }
+            .frame(height: 5)
+            .accessibilityElement()
+            .accessibilityLabel(Text("\(window.label) usage"))
+            .accessibilityValue(Text("\(Int(window.usedPercent.rounded())) percent"))
         }
     }
 

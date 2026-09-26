@@ -339,6 +339,16 @@ struct ControlStoreTests {
         else { Issue.record("list not reloaded") }
     }
 
+    @Test("The screenshot demo shows only example accounts and never loads real logins")
+    func demoStoreIsExampleOnly() async {
+        let store = ControlStore.demo()
+        store.windowOpened()
+        #expect(store.claudeActivity == .idle && store.codexActivity == .idle)
+        #expect(!store.isLoadingClaudeUsage && !store.isLoadingCodexUsage)
+        guard case .loaded(let codex) = store.codexLogins else { Issue.record("demo has no Codex logins"); return }
+        #expect(codex.logins.allSatisfy { $0.email?.hasSuffix("@example.com") == true })
+    }
+
     @Test("The menu-bar warning appears only when Claude needs recovery, never for mock Codex data")
     func menuWarningTracksClaudeRecovery() async throws {
         let store = makeStore(claudeBackend: try SavedLoginBackend(
