@@ -27,34 +27,460 @@ struct KeychainNativeCalls {
     )
 }
 
-struct IsolatedKeychainAdapter {
+struct ManagerKeychainNativeCalls {
+    var createTrustedApplication: (String) -> (OSStatus, CFTypeRef?)
+    var createAccess: (CFString, CFArray) -> (OSStatus, CFTypeRef?)
+
+    static let live = Self(
+        createTrustedApplication: { path in
+            var application: SecTrustedApplication?
+            let status = SecTrustedApplicationCreateFromPath(path, &application)
+            return (status, application)
+        },
+        createAccess: { description, applications in
+            var access: SecAccess?
+            let status = SecAccessCreate(description, applications, &access)
+            return (status, access)
+        }
+    )
+}
+
+protocol ClaudeLoginDataStore {
+    func read() throws -> Data
+    func create(data: Data) throws
+    func update(data: Data) throws
+    func create(data: Data, guardedBy guardMutation: () throws -> Void) throws
+    func update(data: Data, guardedBy guardMutation: () throws -> Void) throws
+}
+
+extension ClaudeLoginDataStore {
+    func create(data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        try guardMutation()
+        try create(data: data)
+    }
+
+    func update(data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        try guardMutation()
+        try update(data: data)
+    }
+}
+
+enum ClaudeLoginEnvelopeError: Error, Equatable {
+    case tooLarge
+    case invalid
+    case unsupportedVersion
+    case recoveryRequired
+    case readbackMismatch
+}
+
+struct ClaudeLoginEnvelopeCodec {
+    private struct Envelope: Codable {
+        let version: Int
+        let snapshots: [String: Snapshot]
+        let activeAlias: String?
+        let journal: Journal?
+    }
+
+    private struct Snapshot: Codable {
+        let claudeAiOauth: Presence
+        let oauthAccount: Presence
+        let organizationUUID: Presence
+        let trustedDeviceToken: Presence
+        let accountUUID: String
+        let identityOrganizationUUID: String?
+        let usability: String
+    }
+
+    private struct Presence: Codable {
+        let kind: String
+        let value: String?
+
+        init(_ source: JSONPresence) {
+            switch source {
+            case .missing: kind = "missing"; value = nil
+            case .null: kind = "null"; value = nil
+            case .value(let raw): kind = "value"; value = raw
+            }
+        }
+
+        func decoded(maxBytes: Int, maxDepth: Int) throws -> JSONPresence {
+            switch (kind, value) {
+            case ("missing", nil): return .missing
+            case ("null", nil): return .null
+            case ("value", .some(let raw)):
+                try ClaudeLoginEnvelopeCodec.admitRawValue(raw, maxBytes: maxBytes, maxDepth: maxDepth)
+                guard raw.trimmingCharacters(in: .whitespacesAndNewlines) != "null" else {
+                    throw ClaudeLoginEnvelopeError.invalid
+                }
+                return .value(raw)
+            default: throw ClaudeLoginEnvelopeError.invalid
+            }
+        }
+    }
+
+    private struct OwnedFields: Codable {
+        let secure: [String: Presence]
+        let configuration: [String: Presence]
+
+        init(_ source: ClaudeLoginOwnedFields) {
+            secure = source.secure.mapValues(Presence.init)
+            configuration = source.configuration.mapValues(Presence.init)
+        }
+
+        func decoded(maxBytes: Int, maxDepth: Int) throws -> ClaudeLoginOwnedFields {
+            .init(
+                secure: try secure.mapValues { try $0.decoded(maxBytes: maxBytes, maxDepth: maxDepth) },
+                configuration: try configuration.mapValues { try $0.decoded(maxBytes: maxBytes, maxDepth: maxDepth) }
+            )
+        }
+    }
+
+    private struct Journal: Codable {
+        let operationID: String
+        let source: String
+        let target: String
+        let before: OwnedFields
+        let after: OwnedFields
+        let phase: String
+
+        init(_ source: ClaudeLoginJournal) {
+            operationID = source.operationID; self.source = source.source; target = source.target
+            before = .init(source.before); after = .init(source.after); phase = source.phase.rawValue
+        }
+    }
+
+    let maxBytes: Int
+    let maxDepth: Int
+
+    init(maxBytes: Int = 1_048_576, maxDepth: Int = 64) {
+        self.maxBytes = maxBytes
+        self.maxDepth = maxDepth
+    }
+
+    func encode(_ state: ClaudeLoginState) throws -> Data {
+        try validate(state)
+        let snapshots = Dictionary(uniqueKeysWithValues: state.snapshots.map { alias, snapshot in
+            (alias, Snapshot(
+                claudeAiOauth: Presence(snapshot.claudeAiOauth), oauthAccount: Presence(snapshot.oauthAccount),
+                organizationUUID: Presence(snapshot.organizationUUID),
+                trustedDeviceToken: Presence(snapshot.trustedDeviceToken),
+                accountUUID: snapshot.identity.accountUUID,
+                identityOrganizationUUID: snapshot.identity.organizationUUID,
+                usability: snapshot.usability == .usable ? "usable" : "reLoginNeeded"
+            ))
+        })
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(Envelope(
+            version: 1, snapshots: snapshots, activeAlias: state.activeAlias,
+            journal: state.journal.map(Journal.init)
+        )) else {
+            throw ClaudeLoginEnvelopeError.invalid
+        }
+        guard data.count <= maxBytes else { throw ClaudeLoginEnvelopeError.tooLarge }
+        guard Self.hasBoundedDepth(data, maxDepth: maxDepth) else { throw ClaudeLoginEnvelopeError.invalid }
+        return data
+    }
+
+    func decode(_ data: Data) throws -> ClaudeLoginState {
+        guard data.count <= maxBytes else { throw ClaudeLoginEnvelopeError.tooLarge }
+        guard Self.hasBoundedDepth(data, maxDepth: maxDepth) else { throw ClaudeLoginEnvelopeError.invalid }
+        if let source = String(data: data, encoding: .utf8),
+           let root = try? ScopedJSON(source), case .value = root.presence(of: "journal") {
+            throw ClaudeLoginEnvelopeError.recoveryRequired
+        }
+        let state = try decodeRecoveryRecord(data)
+        guard state.journal == nil else { throw ClaudeLoginEnvelopeError.recoveryRequired }
+        return state
+    }
+
+    func decodeRecoveryRecord(_ data: Data) throws -> ClaudeLoginState {
+        guard data.count <= maxBytes else { throw ClaudeLoginEnvelopeError.tooLarge }
+        guard let source = String(data: data, encoding: .utf8), Self.hasBoundedDepth(data, maxDepth: maxDepth) else {
+            throw ClaudeLoginEnvelopeError.invalid
+        }
+        do { _ = try ScopedJSON(source) } catch { throw ClaudeLoginEnvelopeError.invalid }
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
+            throw ClaudeLoginEnvelopeError.invalid
+        }
+        guard envelope.version == 1 else { throw ClaudeLoginEnvelopeError.unsupportedVersion }
+        var snapshots: [String: ClaudeLoginSnapshot] = [:]
+        for (alias, stored) in envelope.snapshots {
+            let snapshot = try reconstructedSnapshot(
+                claudeAiOauth: stored.claudeAiOauth,
+                oauthAccount: stored.oauthAccount,
+                organizationUUID: stored.organizationUUID,
+                trustedDeviceToken: stored.trustedDeviceToken
+            )
+            guard snapshot.identity == .init(
+                accountUUID: stored.accountUUID,
+                organizationUUID: stored.identityOrganizationUUID
+            ), stored.usability == (snapshot.usability == .usable ? "usable" : "reLoginNeeded") else {
+                throw ClaudeLoginEnvelopeError.invalid
+            }
+            snapshots[alias] = snapshot
+        }
+        let journal: ClaudeLoginJournal?
+        if let stored = envelope.journal {
+            guard !stored.operationID.isEmpty,
+                  let phase = ClaudeLoginJournalPhase(rawValue: stored.phase) else {
+                throw ClaudeLoginEnvelopeError.invalid
+            }
+            journal = try .init(
+                operationID: stored.operationID, source: stored.source, target: stored.target,
+                before: stored.before.decoded(maxBytes: maxBytes, maxDepth: maxDepth),
+                after: stored.after.decoded(maxBytes: maxBytes, maxDepth: maxDepth), phase: phase
+            )
+        } else { journal = nil }
+        let state = ClaudeLoginState(
+            snapshots: snapshots, activeAlias: envelope.activeAlias, journal: journal
+        )
+        try validate(state)
+        return state
+    }
+
+    private func validate(_ state: ClaudeLoginState) throws {
+        guard state.snapshots.count <= 2,
+              state.snapshots.keys.allSatisfy({ $0.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil }),
+              state.activeAlias.map({ state.snapshots[$0] != nil }) ?? true,
+              Set(state.snapshots.values.map(\.identity)).count == state.snapshots.count else {
+            throw ClaudeLoginEnvelopeError.invalid
+        }
+        if let journal = state.journal {
+            try validateRawValues(journal.before)
+            try validateRawValues(journal.after)
+            guard UUID(uuidString: journal.operationID) != nil,
+                  let source = state.snapshots[journal.source], let target = state.snapshots[journal.target],
+                  Set(journal.before.secure.keys) == ["claudeAiOauth", "organizationUuid", "trustedDeviceToken"],
+                  Set(journal.after.secure.keys) == Set(journal.before.secure.keys),
+                  Set(journal.before.configuration.keys) == Set(["oauthAccount"] + ClaudeConfigurationPatch.accountCacheKeys),
+                  Set(journal.after.configuration.keys) == Set(journal.before.configuration.keys),
+                  journal.before.secure == ClaudeLoginOwnedFields.target(source).secure,
+                  journal.before.configuration["oauthAccount"] == source.oauthAccount,
+                  journal.after == ClaudeLoginOwnedFields.target(target),
+                  journal.phase != .committed || state.activeAlias == journal.target else {
+                throw ClaudeLoginEnvelopeError.invalid
+            }
+        }
+        for snapshot in state.snapshots.values {
+            let reconstructed = try reconstructedSnapshot(
+                claudeAiOauth: Presence(snapshot.claudeAiOauth),
+                oauthAccount: Presence(snapshot.oauthAccount),
+                organizationUUID: Presence(snapshot.organizationUUID),
+                trustedDeviceToken: Presence(snapshot.trustedDeviceToken)
+            )
+            guard reconstructed == snapshot else { throw ClaudeLoginEnvelopeError.invalid }
+        }
+    }
+
+    private func validateRawValues(_ fields: ClaudeLoginOwnedFields) throws {
+        for presence in Array(fields.secure.values) + fields.configuration.values {
+            _ = try Presence(presence).decoded(maxBytes: maxBytes, maxDepth: maxDepth)
+        }
+    }
+
+    private func reconstructedSnapshot(
+        claudeAiOauth: Presence,
+        oauthAccount: Presence,
+        organizationUUID: Presence,
+        trustedDeviceToken: Presence
+    ) throws -> ClaudeLoginSnapshot {
+        do {
+            let secure = try ScopedJSON("{}").replacing([
+                "claudeAiOauth": try claudeAiOauth.decoded(maxBytes: maxBytes, maxDepth: maxDepth),
+                "organizationUuid": try organizationUUID.decoded(maxBytes: maxBytes, maxDepth: maxDepth),
+                "trustedDeviceToken": try trustedDeviceToken.decoded(maxBytes: maxBytes, maxDepth: maxDepth)
+            ])
+            let configuration = try ScopedJSON("{}").replacing([
+                "oauthAccount": try oauthAccount.decoded(maxBytes: maxBytes, maxDepth: maxDepth)
+            ])
+            return try ClaudeLoginSnapshot.capture(secureRoot: secure, configurationRoot: configuration)
+        } catch let error as ClaudeLoginEnvelopeError {
+            throw error
+        } catch {
+            throw ClaudeLoginEnvelopeError.invalid
+        }
+    }
+
+    private static func admitRawValue(_ raw: String, maxBytes: Int, maxDepth: Int) throws {
+        let data = Data(raw.utf8)
+        guard data.count <= maxBytes else { throw ClaudeLoginEnvelopeError.tooLarge }
+        guard hasBoundedDepth(data, maxDepth: maxDepth) else { throw ClaudeLoginEnvelopeError.invalid }
+        do { _ = try ScopedJSON("{}").replacing(["value": .value(raw)]) }
+        catch { throw ClaudeLoginEnvelopeError.invalid }
+    }
+
+    private static func hasBoundedDepth(_ data: Data, maxDepth: Int) -> Bool {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for byte in data {
+            if inString {
+                if escaped { escaped = false }
+                else if byte == 0x5C { escaped = true }
+                else if byte == 0x22 { inString = false }
+            } else if byte == 0x22 {
+                inString = true
+            } else if byte == 0x7B || byte == 0x5B {
+                depth += 1
+                if depth > maxDepth { return false }
+            } else if byte == 0x7D || byte == 0x5D {
+                depth -= 1
+                if depth < 0 { return false }
+            }
+        }
+        return depth == 0 && !inString && !escaped
+    }
+}
+
+struct ClaudeLoginCustody {
+    let store: any ClaudeLoginDataStore
+    var codec = ClaudeLoginEnvelopeCodec()
+
+    func load() throws -> ClaudeLoginState {
+        try loadWithPresence().state
+    }
+
+    func loadWithPresence() throws -> (state: ClaudeLoginState, exists: Bool) {
+        do { return (try codec.decode(store.read()), true) }
+        catch IsolatedKeychainError.missing { return (ClaudeLoginState(), false) }
+    }
+
+    func loadRecoveryRecord() throws -> ClaudeLoginState {
+        try codec.decodeRecoveryRecord(store.read())
+    }
+
+    func save(
+        _ state: ClaudeLoginState,
+        expectedExisting: Bool? = nil,
+        guardedBy guardMutation: () throws -> Void = {},
+        permitsJournal: Bool = false
+    ) throws {
+        let encoded = try codec.encode(state)
+        do {
+            let existing = try store.read()
+            _ = permitsJournal ? try codec.decodeRecoveryRecord(existing) : try codec.decode(existing)
+        } catch IsolatedKeychainError.missing {
+            guard expectedExisting != true else { throw IsolatedKeychainError.missing }
+            try store.create(data: encoded, guardedBy: guardMutation)
+            try verify(encoded, represents: state, permitsJournal: permitsJournal)
+            return
+        }
+        guard expectedExisting != false else { throw IsolatedKeychainError.corrupt }
+        try store.update(data: encoded, guardedBy: guardMutation)
+        try verify(encoded, represents: state, permitsJournal: permitsJournal)
+    }
+
+    private func verify(_ encoded: Data, represents state: ClaudeLoginState, permitsJournal: Bool) throws {
+        do {
+            let readback = try store.read()
+            let decoded = permitsJournal ? try codec.decodeRecoveryRecord(readback) : try codec.decode(readback)
+            guard readback == encoded, decoded == state else {
+                throw ClaudeLoginEnvelopeError.readbackMismatch
+            }
+        } catch {
+            throw ClaudeLoginEnvelopeError.readbackMismatch
+        }
+    }
+}
+
+enum ManagerKeychainPolicy {
+    enum Error: Swift.Error, Equatable { case unapprovedBinary(OSStatus), accessCreation(OSStatus) }
+
+    static func creationAttributes(uid: uid_t, approvedAccess: CFTypeRef) -> [CFString: Any] {
+        [
+            kSecAttrService: "AIControl-claude-logins.v1",
+            kSecAttrAccount: String(uid),
+            kSecAttrSynchronizable: false,
+            kSecAttrAccess: approvedAccess
+        ]
+    }
+
+    static func creationAttributes(
+        uid: uid_t = geteuid(),
+        approvedBinaryPath: String,
+        calls: ManagerKeychainNativeCalls = .live
+    ) throws -> [CFString: Any] {
+        let (applicationStatus, application) = calls.createTrustedApplication(approvedBinaryPath)
+        guard applicationStatus == errSecSuccess, let application else {
+            throw Error.unapprovedBinary(applicationStatus)
+        }
+        let (accessStatus, access) = calls.createAccess(
+            "AIControl Claude login manager" as CFString,
+            [application] as CFArray
+        )
+        guard accessStatus == errSecSuccess, let access else { throw Error.accessCreation(accessStatus) }
+        return creationAttributes(uid: uid, approvedAccess: access)
+    }
+}
+
+struct IsolatedKeychainAdapter: ClaudeLoginDataStore {
     private let keychain: CFTypeRef
     private let service: String
     private let account: String
     private let calls: KeychainNativeCalls
+    private let creationAttributes: [CFString: Any]
+    private let beforeMutation: () throws -> Void
 
     init(
         keychain: CFTypeRef,
         service: String,
         account: String,
+        creationAttributes: [CFString: Any] = [:],
+        beforeMutation: @escaping () throws -> Void = {},
         calls: KeychainNativeCalls = .live
     ) {
         self.keychain = keychain
         self.service = service
         self.account = account
+        self.creationAttributes = creationAttributes
+        self.beforeMutation = beforeMutation
         self.calls = calls
     }
 
+    init(
+        keychain: CFTypeRef,
+        approvedBinaryPath: String,
+        uid: uid_t = geteuid(),
+        policyCalls: ManagerKeychainNativeCalls = .live,
+        beforeMutation: @escaping () throws -> Void = {},
+        calls: KeychainNativeCalls = .live
+    ) throws {
+        let attributes = try ManagerKeychainPolicy.creationAttributes(
+            uid: uid,
+            approvedBinaryPath: approvedBinaryPath,
+            calls: policyCalls
+        )
+        self.init(
+            keychain: keychain,
+            service: "AIControl-claude-logins.v1",
+            account: String(uid),
+            creationAttributes: attributes,
+            beforeMutation: beforeMutation,
+            calls: calls
+        )
+    }
+
     func create(data: Data) throws {
-        var query = identityQuery
+        try create(data: data, guardedBy: beforeMutation)
+    }
+
+    func create(data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        var query = creationAttributes
+        identityQuery.forEach { query[$0] = $1 }
         query[kSecUseKeychain] = keychain
         query[kSecAttrSynchronizable] = false
         query[kSecValueData] = data
+        try guardMutation()
         try check(calls.add(query as CFDictionary))
     }
 
     func read() throws -> Data {
         let reference = try persistentReference()
+        return try readData(reference: reference)
+    }
+
+    private func readData(reference: Data) throws -> Data {
         var query = referenceQuery(reference)
         query[kSecReturnData] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
@@ -65,7 +491,22 @@ struct IsolatedKeychainAdapter {
     }
 
     func update(data: Data) throws {
+        try update(data: data, guardedBy: beforeMutation)
+    }
+
+    func update(data: Data, guardedBy guardMutation: () throws -> Void) throws {
         let reference = try persistentReference()
+        try guardMutation()
+        try check(calls.update(
+            referenceQuery(reference) as CFDictionary,
+            [kSecValueData: data] as CFDictionary
+        ))
+    }
+
+    func replace(expectedData: Data, with data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        let reference = try persistentReference()
+        guard try readData(reference: reference) == expectedData else { throw IsolatedKeychainError.corrupt }
+        try guardMutation()
         try check(calls.update(
             referenceQuery(reference) as CFDictionary,
             [kSecValueData: data] as CFDictionary
@@ -162,7 +603,7 @@ struct ClaudeConfigurationPatch {
         return result
     }
 
-    private static let accountCacheKeys = [
+    static let accountCacheKeys = [
         "additionalModelOptionsCache", "additionalModelCostsCache", "modelAccessCache",
         "orgModelDefaultCache", "lastSeenOrgDefaultUpdatedAt", "clientDataCache",
         "clientDataCacheSlots", "autoCompactWindowsCache", "cachedUsageUtilization"
@@ -196,9 +637,20 @@ struct ProtectedConfigurationFile {
     var hooks = ProtectedConfigurationHooks()
 
     func update(_ patch: ClaudeConfigurationPatch) throws {
+        try replace(expectedSource: nil, with: patch, guardedBy: {})
+    }
+
+    private func replace(
+        expectedSource: String?,
+        with patch: ClaudeConfigurationPatch,
+        guardedBy guardMutation: () throws -> Void
+    ) throws {
         let initial = try snapshot()
         defer { close(initial.descriptor) }
         let source = try admittedString(initial.data)
+        guard expectedSource == nil || source == expectedSource else {
+            throw ProtectedConfigurationError.changedBeforeCommit
+        }
         let rendered: String
         do {
             rendered = try ScopedJSON(source).replacing(patch.changes)
@@ -230,6 +682,7 @@ struct ProtectedConfigurationFile {
         guard sameIdentityAndProtection(initial.metadata, current.metadata), initial.data == current.data else {
             throw ProtectedConfigurationError.changedBeforeCommit
         }
+        try guardMutation()
         var temporaryMetadata = stat()
         guard fstat(temporaryDescriptor, &temporaryMetadata) == 0,
               sameProtection(initial.metadata, temporaryMetadata) else {
@@ -252,6 +705,10 @@ struct ProtectedConfigurationFile {
         } catch {
             throw ProtectedConfigurationError.indeterminateAfterCommit
         }
+    }
+
+    func replace(expectedSource: String, with patch: ClaudeConfigurationPatch, guardedBy guardMutation: () throws -> Void) throws {
+        try replace(expectedSource: Optional(expectedSource), with: patch, guardedBy: guardMutation)
     }
 
     private func snapshot() throws -> Snapshot {
@@ -463,34 +920,104 @@ struct ClaudeProcessRecord: Equatable, Sendable {
     let uid: uid_t?
     let executablePath: String?
     let role: ClaudeProcessRole?
+    let isZombie: Bool
+
+    init(
+        pid: pid_t,
+        parentPID: pid_t?,
+        uid: uid_t?,
+        executablePath: String?,
+        role: ClaudeProcessRole?,
+        isZombie: Bool = false
+    ) {
+        self.pid = pid
+        self.parentPID = parentPID
+        self.uid = uid
+        self.executablePath = executablePath
+        self.role = role
+        self.isZombie = isZombie
+    }
+}
+
+struct ProcessNativeCalls {
+    let listPIDs: (UnsafeMutableRawPointer?, Int32) -> Int32
+    let processInfo: (pid_t, Int32, UInt64, UnsafeMutableRawPointer?, Int32) -> Int32
+    let processPath: (pid_t, UnsafeMutableRawPointer?, UInt32) -> Int32
+
+    static let live = Self(
+        listPIDs: { proc_listpids(UInt32(PROC_ALL_PIDS), 0, $0, $1) },
+        processInfo: proc_pidinfo,
+        processPath: proc_pidpath
+    )
 }
 
 struct NativeProcessProbe {
     let snapshot: () throws -> [ClaudeProcessRecord]
 
-    static func system(processIDs: @escaping () throws -> [pid_t] = {
-        let byteCount = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard byteCount > 0, byteCount <= 1 << 20 else { throw ClaudeProcessPreflightError.uncertain }
-        var pids = [pid_t](repeating: 0, count: Int(byteCount) / MemoryLayout<pid_t>.stride)
-        let copied = pids.withUnsafeMutableBytes {
-            proc_listpids(UInt32(PROC_ALL_PIDS), 0, $0.baseAddress, Int32($0.count))
-        }
-        guard copied > 0 else { throw ClaudeProcessPreflightError.uncertain }
-        return Array(pids.prefix(Int(copied) / MemoryLayout<pid_t>.stride))
-    }) -> Self {
+    static func system(
+        processIDs: (() throws -> [pid_t])? = nil,
+        calls: ProcessNativeCalls = .live
+    ) -> Self {
         .init(snapshot: {
-            try processIDs().filter { $0 > 0 }.map { pid in
-                var info = proc_bsdinfo()
-                var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-                guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info,
-                                   Int32(MemoryLayout<proc_bsdinfo>.size)) == MemoryLayout<proc_bsdinfo>.size,
-                      proc_pidpath(pid, &path, UInt32(path.count)) > 0 else {
+            let processIDs = try validated(processIDs?() ?? inventory(calls: calls))
+            return try processIDs.map { pid in
+                var info = proc_bsdshortinfo()
+                let infoSize = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+                guard calls.processInfo(pid, PROC_PIDT_SHORTBSDINFO, 1, &info, infoSize) == infoSize,
+                      info.pbsi_pid == UInt32(pid) else {
                     throw ClaudeProcessPreflightError.uncertain
                 }
-                return .init(pid: pid, parentPID: pid_t(info.pbi_ppid), uid: info.pbi_uid,
-                             executablePath: String(cString: path), role: nil)
+                let isZombie = info.pbsi_status == UInt32(SZOMB)
+                return .init(
+                    pid: pid,
+                    parentPID: pid_t(info.pbsi_ppid),
+                    uid: info.pbsi_uid,
+                    executablePath: isZombie ? nil : try executablePath(pid: pid, calls: calls),
+                    role: nil,
+                    isZombie: isZombie
+                )
             }
         })
+    }
+
+    private static func inventory(calls: ProcessNativeCalls) throws -> [pid_t] {
+        let byteCount = calls.listPIDs(nil, 0)
+        let stride = Int32(MemoryLayout<pid_t>.stride)
+        guard byteCount > 0, byteCount <= 1 << 20, byteCount % stride == 0 else {
+            throw ClaudeProcessPreflightError.uncertain
+        }
+        var pids = [pid_t](repeating: 0, count: Int(byteCount / stride))
+        let copied = pids.withUnsafeMutableBytes {
+            calls.listPIDs($0.baseAddress, Int32($0.count))
+        }
+        guard copied > 0, copied < byteCount, copied % stride == 0 else {
+            throw ClaudeProcessPreflightError.uncertain
+        }
+        return Array(pids.prefix(Int(copied / stride)))
+    }
+
+    private static func validated(_ processIDs: [pid_t]) throws -> [pid_t] {
+        var seen: Set<pid_t> = []
+        return try processIDs.compactMap { pid in
+            if pid == 0 { return nil }
+            guard pid > 0, seen.insert(pid).inserted else {
+                throw ClaudeProcessPreflightError.uncertain
+            }
+            return pid
+        }
+    }
+
+    private static func executablePath(pid: pid_t, calls: ProcessNativeCalls) throws -> String {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let copied = calls.processPath(pid, &buffer, UInt32(buffer.count))
+        guard copied > 0, copied < buffer.count else { throw ClaudeProcessPreflightError.uncertain }
+        let end = min(Int(copied) + 1, buffer.count)
+        guard let terminator = buffer[..<end].firstIndex(of: 0), terminator > 0,
+              let path = String(bytes: buffer[..<terminator].map(UInt8.init(bitPattern:)), encoding: .utf8),
+              !path.isEmpty else {
+            throw ClaudeProcessPreflightError.uncertain
+        }
+        return path
     }
 }
 
@@ -509,8 +1036,11 @@ struct ClaudeProcessPreflight {
         do { records = try probe.snapshot() } catch { throw ClaudeProcessPreflightError.uncertain }
         var byPID: [pid_t: ClaudeProcessRecord] = [:]
         for record in records {
+            let validLifecycle = record.isZombie
+                ? record.executablePath == nil && record.role == nil
+                : record.executablePath?.isEmpty == false
             guard record.pid > 0, record.parentPID.map({ $0 >= 0 }) ?? true,
-                  record.uid != nil, record.executablePath?.isEmpty == false,
+                  record.uid != nil, validLifecycle,
                   byPID.updateValue(record, forKey: record.pid) == nil else {
                 throw ClaudeProcessPreflightError.uncertain
             }
@@ -522,7 +1052,7 @@ struct ClaudeProcessPreflight {
                 guard visited.insert(record.pid).inserted else {
                     throw ClaudeProcessPreflightError.uncertain
                 }
-                if record.role != nil || record.executablePath == trustedExecutablePath {
+                if !record.isZombie && (record.role != nil || record.executablePath == trustedExecutablePath) {
                     throw ClaudeProcessPreflightError.active
                 }
                 guard let parent = record.parentPID, let ancestor = byPID[parent],

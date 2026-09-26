@@ -1,6 +1,6 @@
 import Foundation
 
-struct ClaudeLoginIdentity: Equatable, Sendable {
+struct ClaudeLoginIdentity: Hashable, Sendable {
     let accountUUID: String
     let organizationUUID: String?
 }
@@ -69,12 +69,347 @@ struct ClaudeLoginSnapshot: Equatable, Sendable {
 struct ClaudeLoginState: Equatable, Sendable {
     var snapshots: [String: ClaudeLoginSnapshot] = [:]
     var activeAlias: String?
+    var journal: ClaudeLoginJournal? = nil
 }
+
+enum ClaudeLoginJournalPhase: String, Equatable, Sendable { case pending, committed }
+
+struct ClaudeLoginOwnedFields: Equatable, Sendable {
+    let secure: [String: JSONPresence]
+    let configuration: [String: JSONPresence]
+
+    static func capture(_ roots: ClaudeLoginRoots) throws -> Self {
+        let secure = try ScopedJSON(roots.secure)
+        let configuration = try ScopedJSON(roots.configuration)
+        return .init(
+            secure: Dictionary(uniqueKeysWithValues: ["claudeAiOauth", "organizationUuid", "trustedDeviceToken"].map {
+                ($0, secure.presence(of: $0))
+            }),
+            configuration: Dictionary(uniqueKeysWithValues: (["oauthAccount"] + ClaudeConfigurationPatch.accountCacheKeys).map {
+                ($0, configuration.presence(of: $0))
+            })
+        )
+    }
+
+    static func target(_ snapshot: ClaudeLoginSnapshot) -> Self {
+        .init(
+            secure: [
+                "claudeAiOauth": snapshot.claudeAiOauth, "organizationUuid": snapshot.organizationUUID,
+                "trustedDeviceToken": snapshot.trustedDeviceToken
+            ],
+            configuration: Dictionary(uniqueKeysWithValues: [
+                ("oauthAccount", snapshot.oauthAccount)
+            ] + ClaudeConfigurationPatch.accountCacheKeys.map { ($0, JSONPresence.missing) })
+        )
+    }
+}
+
+struct ClaudeLoginJournal: Equatable, Sendable {
+    let operationID: String
+    let source: String
+    let target: String
+    let before: ClaudeLoginOwnedFields
+    let after: ClaudeLoginOwnedFields
+    var phase: ClaudeLoginJournalPhase
+}
+
+struct ClaudeLoginRoots: Equatable, Sendable { let secure: String; let configuration: String }
+
+struct ClaudeLoginResourceIO {
+    let readRoots: () throws -> ClaudeLoginRoots
+    let replaceSecure: (String, String, () throws -> Void) throws -> Void
+    let replaceConfiguration: (String, String, () throws -> Void) throws -> Void
+}
+
+enum ClaudeLoginSelectionError: Error { case unavailable, unknownAlias, reLoginNeeded, ambiguousOutgoing, changedRoots, cleanupUncertain }
 
 protocol ClaudeLoginBackend {
     func loadState() throws -> ClaudeLoginState
     func currentSnapshot() throws -> ClaudeLoginSnapshot
     func saveState(_ state: ClaudeLoginState) throws
+    func selectAlias(_ alias: String) throws
+    func recoverPendingLogin() throws
+    func perform(command: ClaudeLoginBackendCommand, operation: (any ClaudeLoginBackend) throws -> Int32) throws -> Int32
+}
+
+enum ClaudeLoginBackendCommand { case save, list, use, recover }
+
+extension ClaudeLoginBackend {
+    func selectAlias(_: String) throws { throw ClaudeLoginSelectionError.unavailable }
+    func recoverPendingLogin() throws { throw ClaudeLoginSelectionError.unavailable }
+    func perform(
+        command: ClaudeLoginBackendCommand,
+        operation: (any ClaudeLoginBackend) throws -> Int32
+    ) throws -> Int32 {
+        try operation(self)
+    }
+}
+
+final class GuardedClaudeLoginBackend: ClaudeLoginBackend {
+    private let custody: ClaudeLoginCustody
+    private let processPreflight: ClaudeProcessPreflight
+    private let capture: () throws -> ClaudeLoginSnapshot
+    private let commandInitialState: ClaudeLoginState?
+    private let commandInitiallyExisting: Bool?
+    private let selectionResources: ClaudeLoginResourceIO?
+
+    init(
+        custody: ClaudeLoginCustody,
+        processPreflight: ClaudeProcessPreflight,
+        currentSnapshot: @escaping () throws -> ClaudeLoginSnapshot,
+        commandInitialState: ClaudeLoginState? = nil,
+        commandInitiallyExisting: Bool? = nil,
+        selectionResources: ClaudeLoginResourceIO? = nil
+    ) {
+        self.custody = custody
+        self.processPreflight = processPreflight
+        self.capture = currentSnapshot
+        self.commandInitialState = commandInitialState
+        self.commandInitiallyExisting = commandInitiallyExisting
+        self.selectionResources = selectionResources
+    }
+
+    func loadState() throws -> ClaudeLoginState { try commandInitialState ?? custody.load() }
+    func currentSnapshot() throws -> ClaudeLoginSnapshot {
+        try processPreflight.requireQuiescent()
+        return try capture()
+    }
+
+    func saveState(_ state: ClaudeLoginState) throws {
+        try persist(state, permitsJournal: false)
+    }
+
+    func selectAlias(_ alias: String) throws {
+        guard let resources = selectionResources else { throw ClaudeLoginSelectionError.unavailable }
+        var state = try loadState()
+        guard let initialTarget = state.snapshots[alias] else { throw ClaudeLoginSelectionError.unknownAlias }
+        guard initialTarget.usability == .usable else { throw ClaudeLoginSelectionError.reLoginNeeded }
+        try processPreflight.requireQuiescent()
+        let roots = try resources.readRoots()
+        try validateSelectionRoots(roots)
+        let before = try ClaudeLoginOwnedFields.capture(roots)
+        let current = try ClaudeLoginSnapshot.capture(
+            secureRoot: roots.secure, configurationRoot: roots.configuration
+        )
+        let sources = state.snapshots.filter { $0.value.identity == current.identity }.map(\.key)
+        guard sources.count == 1, let source = sources.first else {
+            throw ClaudeLoginSelectionError.ambiguousOutgoing
+        }
+        state.snapshots[source] = current
+        try saveState(state)
+        guard let target = state.snapshots[alias], target.usability == .usable else {
+            throw ClaudeLoginSelectionError.reLoginNeeded
+        }
+        state.journal = .init(
+            operationID: UUID().uuidString, source: source, target: alias, before: before,
+            after: .target(target), phase: .pending
+        )
+        var prepared = false
+        var committed = false
+        do {
+            try persist(state, permitsJournal: true) { prepared = true }
+            guard try resources.readRoots() == roots else { throw ClaudeLoginSelectionError.changedRoots }
+            let secure = try ScopedJSON(roots.secure).replacing(state.journal!.after.secure)
+            let configuration = try ScopedJSON(roots.configuration).replacing(state.journal!.after.configuration)
+            try resources.replaceSecure(roots.secure, secure, processPreflight.requireQuiescent)
+            let securePostimage = try ClaudeLoginOwnedFields.capture(resources.readRoots())
+            guard securePostimage.secure == state.journal?.after.secure else {
+                throw ClaudeLoginEnvelopeError.readbackMismatch
+            }
+            try resources.replaceConfiguration(roots.configuration, configuration, processPreflight.requireQuiescent)
+            let verified = try ClaudeLoginOwnedFields.capture(resources.readRoots())
+            guard verified == state.journal?.after else { throw ClaudeLoginEnvelopeError.readbackMismatch }
+            try processPreflight.requireQuiescent()
+            state.activeAlias = alias
+            state.journal?.phase = .committed
+            try persist(state, permitsJournal: true) { committed = true }
+            state.journal = nil
+            try persist(state, permitsJournal: true)
+        } catch {
+            if committed { throw ClaudeLoginSelectionError.cleanupUncertain }
+            if prepared { throw ClaudeLoginEnvelopeError.recoveryRequired }
+            throw error
+        }
+    }
+
+    func recoverPendingLogin() throws {
+        try processPreflight.requireQuiescent()
+        var state = try loadState()
+        guard let journal = state.journal else { return }
+        guard let resources = selectionResources else { throw ClaudeLoginEnvelopeError.recoveryRequired }
+
+        do {
+            let roots = try resources.readRoots()
+            try validateSelectionRoots(roots)
+            let latest = try ClaudeLoginOwnedFields.capture(roots)
+            if journal.phase == .committed {
+                guard latest == journal.after else { throw ClaudeLoginEnvelopeError.readbackMismatch }
+                state.journal = nil
+                try persist(state, permitsJournal: true)
+                return
+            }
+            let secureChanges = try recoveryChanges(
+                latest.secure, before: journal.before.secure, after: journal.after.secure
+            )
+            let configurationChanges = try recoveryChanges(
+                latest.configuration, before: journal.before.configuration, after: journal.after.configuration
+            )
+
+            if !secureChanges.isEmpty {
+                let replacement = try ScopedJSON(roots.secure).replacing(secureChanges)
+                try resources.replaceSecure(roots.secure, replacement, processPreflight.requireQuiescent)
+                guard try ClaudeLoginOwnedFields.capture(resources.readRoots()).secure == journal.before.secure else {
+                    throw ClaudeLoginEnvelopeError.readbackMismatch
+                }
+            }
+            if !configurationChanges.isEmpty {
+                let replacement = try ScopedJSON(roots.configuration).replacing(configurationChanges)
+                try resources.replaceConfiguration(roots.configuration, replacement, processPreflight.requireQuiescent)
+                guard try ClaudeLoginOwnedFields.capture(resources.readRoots()).configuration == journal.before.configuration else {
+                    throw ClaudeLoginEnvelopeError.readbackMismatch
+                }
+            }
+            guard try ClaudeLoginOwnedFields.capture(resources.readRoots()) == journal.before else {
+                throw ClaudeLoginEnvelopeError.readbackMismatch
+            }
+            state.journal = nil
+            try persist(state, permitsJournal: true)
+        } catch {
+            throw ClaudeLoginEnvelopeError.recoveryRequired
+        }
+    }
+
+    private func validateSelectionRoots(_ roots: ClaudeLoginRoots) throws {
+        for root in [try ScopedJSON(roots.secure), try ScopedJSON(roots.configuration)] {
+            guard root.presence(of: "enterpriseGateway") == .missing,
+                  root.presence(of: "designOauth") == .missing else {
+                throw ClaudeLoginSelectionError.changedRoots
+            }
+        }
+    }
+
+    private func recoveryChanges(
+        _ latest: [String: JSONPresence], before: [String: JSONPresence], after: [String: JSONPresence]
+    ) throws -> [String: JSONPresence] {
+        var changes: [String: JSONPresence] = [:]
+        for key in before.keys {
+            guard let current = latest[key], let expectedAfter = after[key] else {
+                throw ClaudeLoginEnvelopeError.recoveryRequired
+            }
+            if current == before[key] { continue }
+            guard current == expectedAfter else { throw ClaudeLoginEnvelopeError.recoveryRequired }
+            changes[key] = before[key]
+        }
+        return changes
+    }
+
+    private func persist(
+        _ state: ClaudeLoginState, permitsJournal: Bool, afterVerifiedSave: () -> Void = {}
+    ) throws {
+        if let commandInitiallyExisting {
+            try custody.save(
+                state, expectedExisting: commandInitiallyExisting,
+                guardedBy: processPreflight.requireQuiescent, permitsJournal: permitsJournal
+            )
+            afterVerifiedSave()
+            let loaded = permitsJournal ? try custody.loadRecoveryRecord() : try custody.load()
+            guard loaded == state else { throw ClaudeLoginEnvelopeError.readbackMismatch }
+            try processPreflight.requireQuiescent()
+            return
+        }
+        try processPreflight.performGuarded(
+            write: {
+                try custody.save(state, permitsJournal: permitsJournal)
+                afterVerifiedSave()
+            },
+            verify: {
+                let loaded = permitsJournal ? try custody.loadRecoveryRecord() : try custody.load()
+                guard loaded == state else { throw ClaudeLoginEnvelopeError.readbackMismatch }
+            }
+        )
+    }
+}
+
+final class CommandScopedClaudeLoginBackend: ClaudeLoginBackend {
+    struct InvalidScope: Error {}
+
+    private let acquireLock: () throws -> ManagerFileLock
+    private let routingEvidence: () throws -> ClaudeRoutingEvidence
+    private let readCustody: () throws -> ClaudeLoginCustody
+    private let writeCustody: (ClaudeStorageRoute, @escaping () throws -> Void) throws -> ClaudeLoginCustody
+    private let processPreflight: ClaudeProcessPreflight
+    private let capture: (ClaudeStorageRoute) throws -> ClaudeLoginSnapshot
+    private let selectionResources: (ClaudeStorageRoute) throws -> ClaudeLoginResourceIO
+
+    init(
+        acquireLock: @escaping () throws -> ManagerFileLock,
+        routingEvidence: @escaping () throws -> ClaudeRoutingEvidence,
+        readCustody: @escaping () throws -> ClaudeLoginCustody,
+        writeCustody: @escaping (ClaudeStorageRoute, @escaping () throws -> Void) throws -> ClaudeLoginCustody,
+        processPreflight: ClaudeProcessPreflight,
+        currentSnapshot: @escaping (ClaudeStorageRoute) throws -> ClaudeLoginSnapshot,
+        selectionResources: @escaping (ClaudeStorageRoute) throws -> ClaudeLoginResourceIO = { _ in
+            throw ClaudeLoginSelectionError.unavailable
+        }
+    ) {
+        self.acquireLock = acquireLock
+        self.routingEvidence = routingEvidence
+        self.readCustody = readCustody
+        self.writeCustody = writeCustody
+        self.processPreflight = processPreflight
+        self.capture = currentSnapshot
+        self.selectionResources = selectionResources
+    }
+
+    func perform(
+        command: ClaudeLoginBackendCommand,
+        operation: (any ClaudeLoginBackend) throws -> Int32
+    ) throws -> Int32 {
+        switch command {
+        case .list:
+            let custody = try readCustody()
+            return try operation(GuardedClaudeLoginBackend(
+                custody: custody, processPreflight: processPreflight,
+                currentSnapshot: { throw InvalidScope() }
+            ))
+        case .save, .use:
+            let lock = try acquireLock()
+            defer { lock.release() }
+            let route = try ClaudeRoutingValidator.route(routingEvidence())
+            let custody = try writeCustody(route, {})
+            let initial = try custody.loadWithPresence()
+            let resources: ClaudeLoginResourceIO?
+            if case .use = command { resources = try selectionResources(route) } else { resources = nil }
+            return try operation(GuardedClaudeLoginBackend(
+                custody: custody, processPreflight: processPreflight,
+                currentSnapshot: { try self.capture(route) }, commandInitialState: initial.state,
+                commandInitiallyExisting: initial.exists,
+                selectionResources: resources
+            ))
+        case .recover:
+            let lock = try acquireLock()
+            defer { lock.release() }
+            let route = try ClaudeRoutingValidator.route(routingEvidence())
+            try processPreflight.requireQuiescent()
+            let custody = try writeCustody(route, {})
+            let initial: (state: ClaudeLoginState, exists: Bool)
+            do {
+                initial = (try custody.loadRecoveryRecord(), true)
+            } catch IsolatedKeychainError.missing {
+                initial = (ClaudeLoginState(), false)
+            }
+            return try operation(GuardedClaudeLoginBackend(
+                custody: custody, processPreflight: processPreflight,
+                currentSnapshot: { throw InvalidScope() }, commandInitialState: initial.state,
+                commandInitiallyExisting: initial.exists,
+                selectionResources: initial.state.journal == nil ? nil : try selectionResources(route)
+            ))
+        }
+    }
+
+    func loadState() throws -> ClaudeLoginState { throw InvalidScope() }
+    func currentSnapshot() throws -> ClaudeLoginSnapshot { throw InvalidScope() }
+    func saveState(_ state: ClaudeLoginState) throws { throw InvalidScope() }
 }
 
 private struct UnavailableClaudeLoginBackend: ClaudeLoginBackend {
@@ -83,6 +418,89 @@ private struct UnavailableClaudeLoginBackend: ClaudeLoginBackend {
     func loadState() throws -> ClaudeLoginState { throw Unavailable() }
     func currentSnapshot() throws -> ClaudeLoginSnapshot { throw Unavailable() }
     func saveState(_ state: ClaudeLoginState) throws { throw Unavailable() }
+}
+
+struct ClaudeLoginAppState: Equatable, Sendable {
+    struct Alias: Equatable, Sendable {
+        let name: String
+        let requiresReLogin: Bool
+    }
+
+    let aliases: [Alias]
+    let lastSelectedHint: String?
+}
+
+enum ClaudeLoginAppResult: Equatable, Sendable {
+    case listed(ClaudeLoginAppState)
+    case verifiedApplied(String)
+    case recoveryChecked
+    case refused
+    case unknownAlias
+    case reLoginNeeded(String)
+    case recoveryRequired
+    case backendUnavailable
+    case postCommitCleanupUncertain
+    case unverifiedFailure
+}
+
+actor ClaudeLoginAppAdapter {
+    private let makeBackend: (() -> any ClaudeLoginBackend)?
+    private var retainedBackend: (any ClaudeLoginBackend)?
+
+    init() { makeBackend = nil }
+    init(makeBackend: @escaping () -> any ClaudeLoginBackend) { self.makeBackend = makeBackend }
+
+    func list() -> ClaudeLoginAppResult {
+        guard let backend = backend() else { return .backendUnavailable }
+        do {
+            var result = ClaudeLoginAppResult.unverifiedFailure
+            _ = try backend.perform(command: .list) {
+                let state = try $0.loadState()
+                let aliases = state.snapshots.map {
+                    ClaudeLoginAppState.Alias(name: $0.key, requiresReLogin: $0.value.usability != .usable)
+                }.sorted { $0.name < $1.name }
+                result = .listed(.init(aliases: aliases, lastSelectedHint: state.activeAlias))
+                return 0
+            }
+            return result
+        } catch { return failure(error) }
+    }
+
+    func use(alias: String) -> ClaudeLoginAppResult {
+        guard let backend = backend() else { return .backendUnavailable }
+        do {
+            _ = try backend.perform(command: .use) { try $0.selectAlias(alias); return 0 }
+            return .verifiedApplied(alias)
+        } catch { return failure(error, alias: alias) }
+    }
+
+    func recover() -> ClaudeLoginAppResult {
+        guard let backend = backend() else { return .backendUnavailable }
+        do {
+            _ = try backend.perform(command: .recover) { try $0.recoverPendingLogin(); return 0 }
+            return .recoveryChecked
+        } catch { return failure(error) }
+    }
+
+    private func backend() -> (any ClaudeLoginBackend)? {
+        if let retainedBackend { return retainedBackend }
+        guard let makeBackend else { return nil }
+        let backend = makeBackend()
+        retainedBackend = backend
+        return backend
+    }
+
+    private func failure(_ error: Error, alias: String? = nil) -> ClaudeLoginAppResult {
+        switch error {
+        case ClaudeLoginEnvelopeError.recoveryRequired: return .recoveryRequired
+        case ClaudeLoginSelectionError.unknownAlias: return .unknownAlias
+        case ClaudeLoginSelectionError.reLoginNeeded: return .reLoginNeeded(alias ?? "")
+        case ClaudeLoginSelectionError.cleanupUncertain: return .postCommitCleanupUncertain
+        case ClaudeLoginSelectionError.unavailable: return .backendUnavailable
+        case ClaudeLoginSelectionError.ambiguousOutgoing, ClaudeLoginSelectionError.changedRoots: return .refused
+        default: return .unverifiedFailure
+        }
+    }
 }
 
 private enum ClaudeLoginCommand {
@@ -135,28 +553,55 @@ func runClaudeLogins(
         output("Usage: AIControl claude-login save <alias> | list | use <alias> | recover")
         return 2
     }
-    switch command {
-    case .use:
-        output("Blocked: account selection is not implemented.")
-        return 3
-    case .recover:
-        output("Blocked: recovery is not implemented.")
-        return 3
-    case .save, .list:
-        break
-    }
-
     let backend = makeBackend()
     do {
         switch command {
-        case .save(let alias): return try save(alias: alias, backend: backend, output: output)
-        case .list: return try list(backend: backend, output: output)
-        case .use, .recover: return 3
+        case .save(let alias):
+            return try backend.perform(command: .save) { try save(alias: alias, backend: $0, output: output) }
+        case .list:
+            return try backend.perform(command: .list) { try list(backend: $0, output: output) }
+        case .use(let alias):
+            return try backend.perform(command: .use) { try use(alias: alias, backend: $0, output: output) }
+        case .recover:
+            return try backend.perform(command: .recover) {
+                try $0.recoverPendingLogin()
+                output("Recovered pending login switch.")
+                return 0
+            }
         }
+    } catch ClaudeLoginEnvelopeError.recoveryRequired {
+        if command.isUse {
+            output("Recovery required before selecting another alias.")
+        } else if command.isRecover {
+            output("Recovery required; recovery did not complete.")
+        } else {
+            output("Recovery required before saving an alias.")
+        }
+        return 4
+    } catch ClaudeLoginSelectionError.unknownAlias {
+        output("Blocked: alias is not saved.")
+        return 3
+    } catch ClaudeLoginSelectionError.reLoginNeeded {
+        if case .use(let alias) = command { output("Re-login needed before selecting alias \(alias).") }
+        return 5
+    } catch ClaudeLoginSelectionError.cleanupUncertain {
+        output("Blocked: selection applied but cleanup is uncertain.")
+        return 3
     } catch {
         output("Blocked: credential backend unavailable.")
         return 3
     }
+}
+
+private extension ClaudeLoginCommand {
+    var isUse: Bool { if case .use = self { return true }; return false }
+    var isRecover: Bool { if case .recover = self { return true }; return false }
+}
+
+private func use(alias: String, backend: any ClaudeLoginBackend, output: (String) -> Void) throws -> Int32 {
+    try backend.selectAlias(alias)
+    output("Applied alias \(alias); restart Claude before use.")
+    return 0
 }
 
 private func save(
