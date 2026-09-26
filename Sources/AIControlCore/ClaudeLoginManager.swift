@@ -656,7 +656,9 @@ private enum ClaudeLoginCommand {
 
 @MainActor
 public func runClaudeLogins(arguments: [String]) -> Int32 {
-    if arguments == ["usage"] || (arguments.count == 3 && ["claude-login", "codex-login"].contains(arguments[0]) && arguments[1] == "renew") {
+    if arguments.first == "status" || arguments == ["usage"] ||
+        (arguments.count >= 2 && ["claude-login", "codex-login"].contains(arguments[0]) &&
+         ["renew", "add"].contains(arguments[1])) {
         return runAsyncReport(arguments: arguments)
     }
     if arguments.first == "codex-login" { return runCodexLogins(arguments: arguments, output: { print($0) }) }
