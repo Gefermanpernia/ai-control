@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 import Darwin
@@ -6,26 +7,93 @@ import Darwin
 ///
 /// Claude Code updates itself often, so an exact binary pin would disable switching after almost every
 /// update. Instead the installed executable must contain the reviewed derivation of the Keychain service,
-/// account and override variables, with only minified identifiers allowed to differ. Any other change fails
-/// closed until it is reviewed.
+/// account and override variables. Only a SHA-256 digest of that derivation is kept here, taken after
+/// short minified names are normalized away, so builds that differ only in those names still match and
+/// any other change fails closed until it is reviewed.
 enum ClaudeStorageContract {
-    private static let anchor = Data(#""-credentials";function "#.utf8)
-    private static let template = #"<removed third-party source>"#
-    private static let expression = try? NSRegularExpression(pattern: "\\A" + template
-        .components(separatedBy: "§")
-        .map(NSRegularExpression.escapedPattern(for:))
-        .joined(separator: "[A-Za-z_$][A-Za-z0-9_$]*"))
+    /// Digest of the derivation in reviewed Claude Code builds 2.1.280, 2.1.282 and 2.1.283.
+    static let reviewedDigest = "022930836e5b0072c994be8a2be4bebcf17aaba9663b92618989576a2ccf768c"
 
-    static func matches(_ data: Data) -> Bool {
-        guard let expression, let first = data.range(of: anchor),
-              data.range(of: anchor, in: first.upperBound..<data.endIndex) == nil else { return false }
-        let window = String(decoding: data[first.lowerBound..<min(first.lowerBound + 4096, data.endIndex)], as: UTF8.self)
-        return expression.firstMatch(in: window, range: NSRange(window.startIndex..., in: window)) != nil
-    }
+    private static let anchor = Data(#""-credentials";function "#.utf8)
+    private static let end = #""claude-code-user";return §}"#
+    private static let keptWords: Set<String> = ["let", "var", "if", "try", "new", "void", "test", "env", "USER"]
+
+    static func matches(_ data: Data, digest: String = reviewedDigest) -> Bool { self.digest(in: data) == digest }
 
     static func matches(executableAt path: String) -> Bool {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .alwaysMapped) else { return false }
         return matches(data)
+    }
+
+    /// The digest of the single derivation in an executable, or nil when it is missing or repeated.
+    static func digest(in data: Data) -> String? {
+        guard let first = data.range(of: anchor),
+              data.range(of: anchor, in: first.upperBound..<data.endIndex) == nil else { return nil }
+        return digest(of: String(decoding: data[first.lowerBound..<min(first.lowerBound + 4096, data.endIndex)], as: UTF8.self))
+    }
+
+    static func digest(of source: String) -> String? {
+        guard let normalized = normalized(source, stoppingAfter: end) else { return nil }
+        return SHA256.hash(data: Data(normalized.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Replaces identifiers of up to four characters with `§` outside string and template text,
+    /// keeping keywords and the names the derivation depends on. With `stoppingAfter`, returns the
+    /// normalized prefix ending with that text, or nil when it never appears.
+    static func normalized(_ source: String, stoppingAfter terminator: String? = nil) -> String? {
+        var output = ""
+        var index = source.startIndex
+        var quote: Character?
+        var templateDepths: [Int] = []
+        var braceDepth = 0
+        while index < source.endIndex {
+            let character = source[index]
+            if let open = quote {
+                output.append(character)
+                if character == "\\" {
+                    index = source.index(after: index)
+                    if index < source.endIndex { output.append(source[index]) }
+                } else if open == "`" && character == "$", source[source.index(after: index)...].first == "{" {
+                    index = source.index(after: index)
+                    output.append("{")
+                    templateDepths.append(braceDepth)
+                    quote = nil
+                } else if character == open {
+                    quote = nil
+                }
+                index = source.index(after: index)
+                continue
+            }
+            if character == "\"" || character == "'" || character == "`" {
+                quote = character
+                output.append(character)
+            } else if character == "{" {
+                braceDepth += 1
+                output.append(character)
+            } else if character == "}" {
+                output.append(character)
+                if templateDepths.last == braceDepth {
+                    templateDepths.removeLast()
+                    quote = "`"
+                } else {
+                    braceDepth -= 1
+                }
+            } else if character.isLetter || character == "_" || character == "$" {
+                var end = index
+                while end < source.endIndex, source[end].isLetter || source[end].isNumber || source[end] == "_" || source[end] == "$" {
+                    end = source.index(after: end)
+                }
+                let word = String(source[index..<end])
+                output += word.count <= 4 && !keptWords.contains(word) ? "§" : word
+                index = end
+                continue
+            } else {
+                output.append(character)
+            }
+            index = source.index(after: index)
+            if let terminator, quote == nil, output.hasSuffix(terminator) { return output }
+        }
+        return quote == nil && terminator == nil ? output : nil
     }
 }
 

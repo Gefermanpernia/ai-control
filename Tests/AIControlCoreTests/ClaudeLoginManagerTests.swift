@@ -2785,16 +2785,26 @@ struct ClaudeLoginManagerTests {
         let published = "\(store.claudeLogins) \(String(describing: store.claudeNotice))"
         for secret in ["accessToken", "RB", "account-b", "org-b"] { #expect(!published.contains(secret)) }
     }
-    @Test("Storage contract accepts reviewed Claude Code builds whatever their minified names")
-    func storageContractAcceptsReviewedBuilds() {
-        for names in StorageDerivation.reviewedNames {
-            #expect(ClaudeStorageContract.matches(StorageDerivation.binary(names)))
-        }
+    @Test("Normalization hides short minified names but keeps literals, keywords and environment names")
+    func storageContractNormalizesMinifiedNames() {
+        #expect(ClaudeStorageContract.normalized(SyntheticDerivation.source(names: ["q", "k", "a", "w", "z", "b", "m"]))
+            == ClaudeStorageContract.normalized(SyntheticDerivation.source(names: ["Xy", "Ab1", "c", "Zz9", "Qr", "d", "e"])))
+        #expect(ClaudeStorageContract.normalized(#"let ab=`x${cd("ab")}y`;"#) == #"let §=`x${§("ab")}y`;"#)
+        #expect(ClaudeStorageContract.normalized(#"var q=process.env.USER;"#) == #"var §=process.env.USER;"#)
     }
 
-    @Test("Storage contract refuses changed, missing, or duplicated credential derivation", arguments: StorageDerivation.Change.allCases)
-    func storageContractRefusesChanges(_ change: StorageDerivation.Change) {
-        #expect(ClaudeStorageContract.matches(change.binary) == false)
+    @Test("Storage contract matches only the reviewed derivation digest")
+    func storageContractMatchesReviewedDigest() throws {
+        let reviewed = SyntheticDerivation.source(names: ["q", "k", "a", "w", "z", "b", "m"])
+        let digest = try #require(ClaudeStorageContract.digest(of: reviewed))
+        let renamed = SyntheticDerivation.binary(SyntheticDerivation.source(names: ["Xy", "Ab1", "c", "Zz9", "Qr", "d", "e"]))
+
+        #expect(ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed), digest: digest))
+        #expect(ClaudeStorageContract.matches(renamed, digest: digest))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed.replacingOccurrences(of: "USER", with: "LOGNAME")), digest: digest))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed + reviewed), digest: digest))
+        #expect(!ClaudeStorageContract.matches(Data(repeating: 0x20, count: 256), digest: digest))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed), digest: String(repeating: "0", count: 64)))
     }
 
     @Test(
@@ -2804,7 +2814,11 @@ struct ClaudeLoginManagerTests {
     func installedBuildsSatisfyStorageContract() {
         let paths = ProcessInfo.processInfo.environment["AI_CONTROL_CLAUDE_BINARIES"]?.split(separator: ":") ?? []
         #expect(!paths.isEmpty)
-        for path in paths { #expect(ClaudeStorageContract.matches(executableAt: String(path)), "\(path)") }
+        for path in paths {
+            let data = try? Data(contentsOf: URL(fileURLWithPath: String(path)), options: .alwaysMapped)
+            #expect(ClaudeStorageContract.matches(executableAt: String(path)),
+                    "\(path): \(data.flatMap(ClaudeStorageContract.digest(in:)) ?? "no derivation found")")
+        }
     }
 
     @Test("Live routing reports overrides, alternate auth, and legacy files as conflicts")
@@ -3989,7 +4003,18 @@ private final class LiveSystemFixture {
     }
 }
 
-enum StorageDerivation {}
+/// A derivation-shaped snippet written for these tests; it is not Claude Code source.
+enum SyntheticDerivation {
+    static func source(names n: [String]) -> String {
+        #""-credentials";function \#(n[0])(){let \#(n[1])=process.env.EXAMPLE_DIR;return \#(n[1])}"#
+            + #"var \#(n[2])=/^[a-z]+$/;function \#(n[3])(){let \#(n[4]);try{\#(n[4])=process.env.USER||\#(n[5])().username}"#
+            + #"catch{\#(n[4])="claude-code-user"}if(!\#(n[2]).test(\#(n[4])))return"claude-code-user";return \#(n[4])}var \#(n[6])=1;"#
+    }
+
+    static func binary(_ source: String) -> Data {
+        Data([0xCF, 0xFA, 0xED, 0xFE, 0x00]) + Data(repeating: 0x20, count: 64) + Data(source.utf8) + Data([0x00, 0xFF])
+    }
+}
 
 private final class ConfigurationFixture {
     let directory: URL
