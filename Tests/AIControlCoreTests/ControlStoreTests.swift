@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import AIControlCore
@@ -337,6 +338,19 @@ struct ControlStoreTests {
         #expect(store.claudeNotice?.text == "Renamed alias alpha to omega.")
         if case .loaded(let state) = store.claudeLogins { #expect(state.aliases.map(\.name) == ["beta", "omega"]) }
         else { Issue.record("list not reloaded") }
+    }
+
+    @Test("Provider icons come from installed apps, fall back to monograms, and never appear in the demo")
+    func providerIconsComeFromInstalledApps() {
+        let store = ControlStore(
+            claudeLogins: ClaudeLoginAppAdapter(), codexLogins: CodexLoginAppAdapter(),
+            appIcon: { $0 == .claude ? NSImage(size: NSSize(width: 8, height: 8)) : nil }
+        )
+        #expect(store.providerIcons[.claude] != nil)
+        #expect(store.providerIcons[.codex] == nil)
+        #expect(ControlStore.demo().providerIcons.isEmpty)
+        #expect(CLIProvider.claude.appBundleIdentifiers == ["com.anthropic.claudefordesktop"])
+        #expect(CLIProvider.codex.appBundleIdentifiers == ["com.openai.codex", "com.openai.chat"])
     }
 
     @Test("The screenshot demo shows only example accounts and never loads real logins")

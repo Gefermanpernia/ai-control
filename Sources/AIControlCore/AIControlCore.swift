@@ -10,6 +10,18 @@ enum CLIProvider: String, CaseIterable, Identifiable {
     var switchDescription: String {
         self == .claude ? "switches Claude Code" : "switches OpenAI Codex"
     }
+
+    /// Desktop apps whose icon represents the provider, in order of preference.
+    var appBundleIdentifiers: [String] {
+        self == .claude ? ["com.anthropic.claudefordesktop"] : ["com.openai.codex", "com.openai.chat"]
+    }
+
+    /// The icon of the provider's installed app. AI Control ships no provider logos; without the app,
+    /// the section shows its monogram instead.
+    func installedAppIcon(workspace: NSWorkspace = .shared) -> NSImage? {
+        appBundleIdentifiers.lazy.compactMap { workspace.urlForApplication(withBundleIdentifier: $0) }
+            .first.map { workspace.icon(forFile: $0.path) }
+    }
 }
 
 enum Appearance: String, CaseIterable, Identifiable {
@@ -71,10 +83,17 @@ final class ControlStore: ObservableObject {
     @Published var appearance: Appearance = .system
     private let claudeAdapter: ClaudeLoginAppAdapter
     private let codexAdapter: CodexLoginAppAdapter
+    let providerIcons: [CLIProvider: NSImage]
 
-    init(claudeLogins: ClaudeLoginAppAdapter = .configured(), codexLogins: CodexLoginAppAdapter = .configured()) {
+    init(
+        claudeLogins: ClaudeLoginAppAdapter = .configured(), codexLogins: CodexLoginAppAdapter = .configured(),
+        appIcon: (CLIProvider) -> NSImage? = { $0.installedAppIcon() }
+    ) {
         claudeAdapter = claudeLogins
         codexAdapter = codexLogins
+        providerIcons = Dictionary(uniqueKeysWithValues: CLIProvider.allCases.compactMap { provider in
+            appIcon(provider).map { (provider, $0) }
+        })
     }
 
     /// Only real Claude trouble warrants the menu-bar alert; mock Codex usage never does.
@@ -157,7 +176,8 @@ final class ControlStore: ObservableObject {
 
     /// Example accounts for screenshots; a demo store never loads or changes real logins.
     static func demo(now: Date = Date()) -> ControlStore {
-        let store = ControlStore()
+        // Screenshots stay free of provider logos, so the demo never shows installed app icons.
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(), codexLogins: CodexLoginAppAdapter(), appIcon: { _ in nil })
         store.isDemo = true
         func usage(_ windows: [(String, Double, Double)], resets: Int? = nil) -> LoginUsageResult {
             .usage(.init(windows: windows.map { .init(label: $0.0, usedPercent: $0.1, resetsAt: now.addingTimeInterval($0.2 * 3600)) },
@@ -426,11 +446,17 @@ struct ControlView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(provider.mark)
-                    .font(.caption2.weight(.semibold))
-                    .frame(width: 24, height: 24)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                    .accessibilityHidden(true)
+                Group {
+                    if let icon = store.providerIcons[provider] {
+                        Image(nsImage: icon).resizable().interpolation(.high).frame(width: 24, height: 24)
+                    } else {
+                        Text(provider.mark)
+                            .font(.caption2.weight(.semibold))
+                            .frame(width: 24, height: 24)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(provider.title).font(.caption.weight(.semibold))
                     Text("Saved logins · \(provider.switchDescription)")
