@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 import Testing
 @testable import AIControlCore
 
@@ -1514,6 +1516,7 @@ struct ClaudeLoginManagerTests {
         #expect(messages == ["Blocked: credential backend unavailable."])
     }
 
+#if os(macOS)
     @Test("Native manager mutations guard after lookup and immediately before OS writes")
     func nativeManagerMutationsGuardAtOSBoundary() throws {
         let reference = Data([0xA1])
@@ -1534,7 +1537,9 @@ struct ClaudeLoginManagerTests {
 
         #expect(events == ["guard", "add", "lookup", "guard", "update"])
     }
+#endif
 
+#if os(macOS)
     @Test("Secure resource replacement refuses changed data after reference lookup")
     func secureResourceReplacementRecomparesAfterLookup() throws {
         let reference = Data([0xA1])
@@ -1572,7 +1577,9 @@ struct ClaudeLoginManagerTests {
         #expect(updates == 0)
         #expect(stored == raced)
     }
+#endif
 
+#if os(macOS)
     @Test("Secure resource replacement guards immediately before one exact data-only update")
     func secureResourceReplacementUsesExactGuardedUpdate() throws {
         let keychain = NSObject()
@@ -1652,7 +1659,9 @@ struct ClaudeLoginManagerTests {
         #expect(adds == 0)
         #expect(deletes == 0)
     }
+#endif
 
+#if os(macOS)
     @Test("A throwing secure replacement guard preserves the exact stored preimage")
     func secureResourceReplacementThrowingGuardDoesNotMutate() {
         let reference = Data([0xC3])
@@ -1690,7 +1699,9 @@ struct ClaudeLoginManagerTests {
         #expect(deletes == 0)
         #expect(stored == expected)
     }
+#endif
 
+#if os(macOS)
     @Test(
         "Secure replacement maps lookup, selected-read, and native-update failures without mutation",
         arguments: [
@@ -1736,6 +1747,7 @@ struct ClaudeLoginManagerTests {
         #expect(deletes == 0)
         #expect(stored == expected)
     }
+#endif
 
     @Test("Configuration resource replacement refuses a stale expected root")
     func configurationResourceReplacementRecomparesExpectedRoot() throws {
@@ -1992,6 +2004,7 @@ struct ClaudeLoginManagerTests {
         #expect(messages == ["Blocked: credential backend unavailable."])
     }
 
+#if os(macOS)
     @Test("Manager Keychain policy is local, UID-bound, nonsynchronizing, and ACL-bound")
     func managerKeychainPolicyBuildsExactAttributes() {
         let approvedAccess = NSObject()
@@ -2002,7 +2015,9 @@ struct ClaudeLoginManagerTests {
         #expect(attributes[kSecAttrSynchronizable] as? Bool == false)
         #expect(attributes[kSecAttrAccess] as AnyObject === approvedAccess)
     }
+#endif
 
+#if os(macOS)
     @Test("Manager Keychain creation binds approved binary policy before adding")
     func managerKeychainCreationBindsApprovedPolicy() throws {
         let keychain = NSObject()
@@ -2066,7 +2081,9 @@ struct ClaudeLoginManagerTests {
         #expect(updateAttributes[kSecValueData] as? Data == Data("replacement".utf8))
         #expect(deleteCount == 0)
     }
+#endif
 
+#if os(macOS)
     @Test("Manager Keychain creation refuses trusted-application failures before adding")
     func managerKeychainCreationRefusesTrustedApplicationFailures() {
         var accessCount = 0
@@ -2101,7 +2118,9 @@ struct ClaudeLoginManagerTests {
         #expect(accessCount == 0)
         #expect(addCount == 0)
     }
+#endif
 
+#if os(macOS)
     @Test("Manager Keychain creation refuses access failures before adding")
     func managerKeychainCreationRefusesAccessFailures() {
         let application = NSObject()
@@ -2135,7 +2154,9 @@ struct ClaudeLoginManagerTests {
         }
         #expect(addCount == 0)
     }
+#endif
 
+#if os(macOS)
     @Test("Isolated Keychain CRUD uses exact explicit-Keychain queries")
     func isolatedKeychainCRUDUsesExactQueries() throws {
         let keychain = NSObject()
@@ -2191,7 +2212,9 @@ struct ClaudeLoginManagerTests {
         #expect(updatedAttributes[kSecValueData] as? Data == Data("replacement".utf8))
         #expect(deletedQuery[kSecValuePersistentRef] as? Data == persistentReference)
     }
+#endif
 
+#if os(macOS)
     @Test("Isolated Keychain adapter distinguishes missing and duplicate items")
     func isolatedKeychainDistinguishesMissingAndDuplicate() {
         let missing = IsolatedKeychainAdapter.testing(status: errSecItemNotFound)
@@ -2200,7 +2223,9 @@ struct ClaudeLoginManagerTests {
         #expect(throws: IsolatedKeychainError.missing) { try missing.read() }
         #expect(throws: IsolatedKeychainError.duplicate) { try duplicate.create(data: Data()) }
     }
+#endif
 
+#if os(macOS)
     @Test(
         "Isolated Keychain adapter maps security failures deterministically",
         arguments: [
@@ -2215,7 +2240,9 @@ struct ClaudeLoginManagerTests {
 
         #expect(throws: expected) { try adapter.read() }
     }
+#endif
 
+#if os(macOS)
     @Test("Isolated Keychain adapter rejects ambiguous and corrupt native results")
     func isolatedKeychainRejectsAmbiguousAndCorruptResults() {
         let ambiguous = IsolatedKeychainAdapter.testing(result: [Data([1]), Data([2])] as CFArray)
@@ -2224,7 +2251,9 @@ struct ClaudeLoginManagerTests {
         #expect(throws: IsolatedKeychainError.ambiguous) { try ambiguous.read() }
         #expect(throws: IsolatedKeychainError.corrupt) { try corrupt.read() }
     }
+#endif
 
+#if os(macOS)
     @Test(
         "Opt-in isolated native Keychain CRUD preserves attributes and cleans up",
         .enabled(if: ProcessInfo.processInfo.environment["AI_CONTROL_KEYCHAIN_TEST_ROOT"] != nil)
@@ -2286,6 +2315,7 @@ struct ClaudeLoginManagerTests {
         try adapter.delete()
         #expect(throws: IsolatedKeychainError.missing) { try adapter.read() }
     }
+#endif
 
     @Test("Protected configuration update preserves raw sentinels and file protections")
     func protectedConfigurationPreservesRawDataAndProtections() throws {
@@ -2516,6 +2546,7 @@ struct ClaudeLoginManagerTests {
         }
     }
 
+#if os(macOS)
     @Test("Native process probe reads a supplied self PID")
     func nativeProcessProbeReadsSuppliedSelfPID() throws {
         let probe = NativeProcessProbe.system(processIDs: { [getpid()] })
@@ -2533,14 +2564,18 @@ struct ClaudeLoginManagerTests {
                 .requireQuiescent()
         }
     }
+#endif
 
+#if os(macOS)
     @Test("Native process probe fails closed for an unavailable PID")
     func nativeProcessProbeRejectsUnavailablePID() {
         let probe = NativeProcessProbe.system(processIDs: { [Int32.max] })
 
         #expect(throws: ClaudeProcessPreflightError.uncertain) { try probe.snapshot() }
     }
+#endif
 
+#if os(macOS)
     @Test("Native process probe requests short BSD metadata and skips zombie paths")
     func nativeProcessProbeUsesZombieAwareMetadata() throws {
         let fixture = ProcessNativeFixture(status: UInt32(SZOMB))
@@ -2555,7 +2590,9 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.pathCalls == 0)
         #expect(record.executablePath == nil)
     }
+#endif
 
+#if os(macOS)
     @Test("Native process inventory rejects uncertain native results", arguments: InventoryFailure.allCases)
     func nativeProcessInventoryRejectsUncertainResults(_ failure: InventoryFailure) {
         let fixture = ProcessNativeFixture(inventoryFailure: failure)
@@ -2569,7 +2606,9 @@ struct ClaudeLoginManagerTests {
         }
         #expect(writes == 0)
     }
+#endif
 
+#if os(macOS)
     @Test("Native process inventory accepts an under-capacity result and ignores kernel PID zero")
     func nativeProcessInventoryAcceptsBoundedResult() throws {
         let fixture = ProcessNativeFixture()
@@ -2578,7 +2617,9 @@ struct ClaudeLoginManagerTests {
 
         #expect(records.map(\.pid) == [42])
     }
+#endif
 
+#if os(macOS)
     @Test("Native process metadata rejects incomplete or mismatched results", arguments: MetadataFailure.allCases)
     func nativeProcessMetadataRejectsUncertainResults(_ failure: MetadataFailure) {
         let fixture = ProcessNativeFixture(metadataFailure: failure)
@@ -2592,7 +2633,9 @@ struct ClaudeLoginManagerTests {
         }
         #expect(writes == 0)
     }
+#endif
 
+#if os(macOS)
     @Test("Every non-zombie process requires a valid executable path", arguments: PathFailure.allCases)
     func nativeProcessProbeRejectsInvalidPaths(_ failure: PathFailure) {
         let fixture = ProcessNativeFixture(pathFailure: failure)
@@ -2606,7 +2649,9 @@ struct ClaudeLoginManagerTests {
         }
         #expect(writes == 0)
     }
+#endif
 
+#if os(macOS)
     @Test("Stopped, exiting, root, and foreign live processes still require paths", arguments: liveMetadataCases)
     func nativeProcessProbeReadsEveryLivePath(_ metadata: LiveMetadataCase) throws {
         let fixture = ProcessNativeFixture(status: metadata.status, flags: metadata.flags, uid: metadata.uid)
@@ -2616,7 +2661,9 @@ struct ClaudeLoginManagerTests {
         #expect(records.first?.executablePath == "/synthetic/live")
         #expect(fixture.pathCalls == 1)
     }
+#endif
 
+#if os(macOS)
     @Test("A process whose executable was deleted is identified by its command name")
     func deletedExecutableIsIdentifiedByName() throws {
         func preflight(_ name: String) -> ClaudeProcessPreflight {
@@ -2632,6 +2679,7 @@ struct ClaudeLoginManagerTests {
         #expect(throws: ClaudeProcessPreflightError.active) { try preflight("claude").requireQuiescent() }
         #expect(throws: ClaudeProcessPreflightError.uncertain) { try preflight("").requireQuiescent() }
     }
+#endif
 
     @Test("Zombie ancestry still reaches a recognized same-user live ancestor")
     func processPreflightPreservesZombieAncestry() {
@@ -2765,6 +2813,7 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.resources.configurationRoot == fixture.betaConfiguration)
     }
 
+#if os(macOS)
     @Test("Store switches a saved login through the guarded backend and publishes no secrets")
     @MainActor
     func storeSwitchesThroughGuardedBackend() async throws {
@@ -2785,6 +2834,7 @@ struct ClaudeLoginManagerTests {
         let published = "\(store.claudeLogins) \(String(describing: store.claudeNotice))"
         for secret in ["accessToken", "RB", "account-b", "org-b"] { #expect(!published.contains(secret)) }
     }
+#endif
     @Test("Normalization hides short minified names but keeps literals, keywords and environment names")
     func storageContractNormalizesMinifiedNames() {
         #expect(ClaudeStorageContract.normalized(SyntheticDerivation.source(names: ["q", "k", "a", "w", "z", "b", "m"]))
@@ -2841,12 +2891,18 @@ struct ClaudeLoginManagerTests {
             (.init(environment: ["ANTHROPIC_API_KEY": "k"]), .alternateAuthentication),
             (.init(environment: ["CLAUDE_CODE_OAUTH_TOKEN": "t"]), .alternateAuthentication),
             (.init(environment: ["CLAUDE_CODE_USE_BEDROCK": "1"]), .alternateAuthentication),
-            (.init(files: ["/home/me/.claude/.credentials.json"]), .plaintextFallback),
             (.init(files: ["/home/me/.claude/.config.json"]), .legacyStorage)
         ]
         for (fixture, conflict) in cases {
             #expect(fixture.system.routingEvidence().conflicts == [conflict])
         }
+        // A credentials file means a Keychain fallback on macOS, but it is Claude's normal Linux store.
+        let credentialsFile = LiveSystemFixture(files: ["/home/me/.claude/.credentials.json"]).system.routingEvidence()
+        #if os(macOS)
+        #expect(credentialsFile.conflicts == [.plaintextFallback])
+        #else
+        #expect(credentialsFile.conflicts.isEmpty)
+        #endif
     }
 
     @Test("Live routing verifies only a native-installer build whose storage contract matches")
@@ -2918,6 +2974,7 @@ struct ClaudeLoginManagerTests {
         ])
     }
 
+#if os(macOS)
     @Test("Security tool item reads text or hex passwords and maps missing items")
     func securityToolItemReads() throws {
         let tool = FakeSecurityTool(responses: [(0, Data("{\"a\":1}\n".utf8)), (0, Data("7b2262223a327d\n".utf8)), (44, Data())])
@@ -2928,7 +2985,9 @@ struct ClaudeLoginManagerTests {
         #expect(tool.calls.first?.arguments == ["find-generic-password", "-a", "me", "-s", "Claude Code-credentials", "-w"])
         #expect(tool.calls.allSatisfy { $0.input == nil })
     }
+#endif
 
+#if os(macOS)
     @Test("Security tool item sends small payloads on stdin and large ones like Claude Code")
     func securityToolItemWritesLikeClaude() throws {
         let tool = FakeSecurityTool(responses: [(0, Data()), (0, Data())])
@@ -2946,7 +3005,9 @@ struct ClaudeLoginManagerTests {
             try SecurityToolKeychainItem(service: "x", account: #"a" -s "b"#, run: tool.run).create(data: Data(), guardedBy: {})
         }
     }
+#endif
 
+#if os(macOS)
     @Test("Security tool replace compares before its guard and writes only after it")
     func securityToolItemReplaceOrdersGuard() throws {
         var events: [String] = []
@@ -2962,7 +3023,9 @@ struct ClaudeLoginManagerTests {
         }
         #expect(!events.contains("late guard"))
     }
+#endif
 
+#if os(macOS)
     @Test("Manager store reads a legacy item without writing and migrates it on the first update")
     func managerStoreMigratesLegacyItem() throws {
         let tool = FakeSecurityTool(responses: [(44, Data()), (44, Data()), (0, Data())])
@@ -2979,6 +3042,7 @@ struct ClaudeLoginManagerTests {
         #expect(guards == 1 && legacyDeleted)
         #expect(tool.calls.last?.input.map { String(decoding: $0, as: UTF8.self) }?.hasPrefix("add-generic-password -a ") == true)
     }
+#endif
 
     @Test("Process preflight treats any executable named claude as a running Claude session")
     func preflightDetectsEmbeddedClaude() throws {
@@ -3022,15 +3086,21 @@ struct ClaudeLoginManagerTests {
         try preflight.requireQuiescent()
     }
 
-    @Test("Live switching stays off unless explicitly enabled")
-    func liveSwitchingStaysOffByDefault() async {
+    @Test("Live switching is on for the installed app and on Linux, and AI_CONTROL_CLAUDE_LIVE=0 turns it off")
+    func liveSwitchingFollowsPlatformDefaults() async {
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "1"], bundlePath: "/repo/.build/debug"))
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "0"], bundlePath: "/Applications/AI Control.app") == false)
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "0"], bundlePath: "/usr/bin") == false)
+        #if os(macOS)
         #expect(ClaudeLiveSystem.isEnabled(environment: [:], bundlePath: "/repo/.build/debug") == false)
         #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "true"], bundlePath: "/repo/.build/debug") == false)
-        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "1"], bundlePath: "/repo/.build/debug"))
         #expect(ClaudeLiveSystem.isEnabled(environment: [:], bundlePath: "/Applications/AI Control.app"))
-        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "0"], bundlePath: "/Applications/AI Control.app") == false)
         #expect(ClaudeLiveSystem.isEnabled(environment: [:], bundlePath: "/tmp/AIControlPackageTests.xctest") == false)
-        #expect(await ClaudeLoginAppAdapter.configured(environment: [:]).list() == .backendUnavailable)
+        #else
+        #expect(ClaudeLiveSystem.isEnabled(environment: [:], bundlePath: "/usr/bin"))
+        #endif
+        // Never live in tests: the real Keychain and login files must stay untouched.
+        #expect(await ClaudeLoginAppAdapter.configured(environment: ["AI_CONTROL_CLAUDE_LIVE": "0"]).list() == .backendUnavailable)
     }
 }
 
@@ -3047,6 +3117,7 @@ private struct AppResultBackend: ClaudeLoginBackend {
     func recoverPendingLogin() throws {}
 }
 
+#if os(macOS)
 private extension IsolatedKeychainAdapter {
     static func testing(status: OSStatus = errSecSuccess, result: CFTypeRef? = nil) -> Self {
         let calls = KeychainNativeCalls(
@@ -3059,10 +3130,13 @@ private extension IsolatedKeychainAdapter {
         )
     }
 }
+#endif
 
+#if os(macOS)
 private func sameKeychainList(_ lhs: [SecKeychain], _ rhs: [SecKeychain]) -> Bool {
     lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { CFEqual($0, $1) }
 }
+#endif
 
 private struct FixtureError: Error {}
 
@@ -3626,17 +3700,16 @@ enum JournalSerializedAttack: CaseIterable {
     case missingOwnedKey, extraOwnedKey, invalidPresence, malformedRaw, valueNull, overDepthRaw
     case inconsistentBefore, inconsistentAfter, inconsistentCommittedMarker
 
+    // Swift dictionaries, not NSMutableDictionary: Linux Foundation returns Swift containers.
     func mutating(_ control: Data) throws -> Data {
-        guard let root = try JSONSerialization.jsonObject(
-            with: control, options: .mutableContainers
-        ) as? NSMutableDictionary,
-        let journal = root["journal"] as? NSMutableDictionary,
-        let before = journal["before"] as? NSMutableDictionary,
-        let after = journal["after"] as? NSMutableDictionary,
-        let beforeSecure = before["secure"] as? NSMutableDictionary,
-        let beforeConfiguration = before["configuration"] as? NSMutableDictionary,
-        let afterSecure = after["secure"] as? NSMutableDictionary,
-        let afterConfiguration = after["configuration"] as? NSMutableDictionary else {
+        guard var root = try JSONSerialization.jsonObject(with: control) as? [String: Any],
+              var journal = root["journal"] as? [String: Any],
+              var before = journal["before"] as? [String: Any],
+              var after = journal["after"] as? [String: Any],
+              var beforeSecure = before["secure"] as? [String: Any],
+              var beforeConfiguration = before["configuration"] as? [String: Any],
+              var afterSecure = after["secure"] as? [String: Any],
+              var afterConfiguration = after["configuration"] as? [String: Any] else {
             throw ClaudeLoginEnvelopeError.invalid
         }
         switch self {
@@ -3646,7 +3719,7 @@ enum JournalSerializedAttack: CaseIterable {
         case .invalidSource: journal["source"] = "Alpha"
         case .unknownTarget: journal["target"] = "gamma"
         case .invalidTarget: journal["target"] = "Beta"
-        case .missingOwnedKey: beforeSecure.removeObject(forKey: "trustedDeviceToken")
+        case .missingOwnedKey: beforeSecure.removeValue(forKey: "trustedDeviceToken")
         case .extraOwnedKey:
             afterConfiguration["futureCache"] = ["kind": "missing", "value": NSNull()]
         case .invalidPresence:
@@ -3668,6 +3741,13 @@ enum JournalSerializedAttack: CaseIterable {
         case .inconsistentCommittedMarker:
             journal["phase"] = "committed"
         }
+        before["secure"] = beforeSecure
+        before["configuration"] = beforeConfiguration
+        after["secure"] = afterSecure
+        after["configuration"] = afterConfiguration
+        journal["before"] = before
+        journal["after"] = after
+        root["journal"] = journal
         return try JSONSerialization.data(withJSONObject: root, options: .sortedKeys)
     }
 }
@@ -3960,6 +4040,7 @@ enum ConfigurationPresence: CaseIterable {
     }
 }
 
+#if os(macOS)
 private final class FakeSecurityTool {
     struct Call { let arguments: [String]; let input: Data? }
     private var responses: [(Int32, Data)]
@@ -3977,6 +4058,7 @@ private final class FakeSecurityTool {
         return (status, output)
     }
 }
+#endif
 
 private final class LiveSystemFixture {
     private(set) var checkedExecutables: [String] = []
@@ -4025,7 +4107,7 @@ private final class ConfigurationFixture {
 
     init(_ contents: String) throws {
         directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("opencode/config-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("ai-control-config-\(UUID().uuidString)", isDirectory: true)
         file = directory.appendingPathComponent(".claude.json")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         try Data(contents.utf8).write(to: file)
@@ -4126,13 +4208,16 @@ struct LiveMetadataCase: Sendable {
     let uid: uid_t
 }
 
+#if os(macOS)
 let liveMetadataCases = [
     LiveMetadataCase(status: UInt32(SSTOP), flags: 0, uid: 501),
     LiveMetadataCase(status: UInt32(SRUN), flags: UInt32(PROC_FLAG_INEXIT), uid: 501),
     LiveMetadataCase(status: UInt32(SRUN), flags: 0, uid: 0),
     LiveMetadataCase(status: UInt32(SRUN), flags: 0, uid: 502)
 ]
+#endif
 
+#if os(macOS)
 private final class ProcessNativeFixture: @unchecked Sendable {
     var infoRequests: [(Int32, UInt64)] = []
     var pathCalls = 0
@@ -4239,6 +4324,7 @@ private final class ProcessNativeFixture: @unchecked Sendable {
         )
     }
 }
+#endif
 
 private extension ClaudeProcessPreflight {
     static func testing(_ records: [ClaudeProcessRecord]) -> Self {
