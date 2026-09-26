@@ -547,6 +547,7 @@ private enum ClaudeLoginCommand {
 
 @MainActor
 public func runClaudeLogins(arguments: [String]) -> Int32 {
+    if arguments.first == "codex-login" { return runCodexLogins(arguments: arguments, output: { print($0) }) }
     let liveBackend = ClaudeLiveSystem.configuredBackend(environment: ProcessInfo.processInfo.environment)
     return runClaudeLogins(
         arguments: arguments,

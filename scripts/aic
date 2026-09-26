@@ -4,6 +4,7 @@
 #   aic save <name>   save the login Claude is using now
 #   aic use <name>    switch Claude to a saved login
 #   aic list | rename <name> <new-name> | recover
+#   aic codex save|use|list|rename ...   the same for Codex
 set -eu
 root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 binary="$root/.build/debug/AIControl"
@@ -12,5 +13,9 @@ if [ $# -eq 0 ]; then
     nohup "$binary" >/dev/null 2>&1 &
     echo "AI Control is running in the menu bar."
     exit 0
+fi
+if [ "$1" = "codex" ]; then
+    shift
+    exec "$binary" codex-login "$@"
 fi
 exec "$binary" claude-login "$@"
