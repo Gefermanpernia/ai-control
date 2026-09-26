@@ -731,3 +731,20 @@ Separate decisions remain synthetic-first 4.7 (no real switching), native macOS 
 - Evidence: focused `ClaudeLoginManagerTests` exit 0, 133 tests; full `./scripts/test` exit 0, 152 tests/2 suites, 1 native Keychain skip; `swift build` complete; `git diff --check` exit 0.
 - Accounting: tests +27, Manager +1, UI fixes +16/-1, this record ≈ 16 → ≈ 61 operations. Rollback: revert the validation line with its test, the regression test, and the two UI fixes independently.
 - Remaining before verify/archive: 4.9 human re-check. Production remains `UnavailableClaudeLoginBackend`; G2 native ACL/signing, live G5 and OpenCode-open acceptance remain separate gates. Nothing committed.
+
+### Production Wiring — Built, Off by Default
+
+- Goal (user, 2026-09-25): switch Claude accounts with one click without logging in again; OpenCode integration deprioritized.
+- Finding: installed Claude Code is 2.1.282 (2.1.274/2.1.280 also present; 2.1.283 was downloading), so the exact 2.1.252 hash pin would refuse every command. Static comparison of 2.1.274 and 2.1.282 showed an identical credential-storage derivation apart from minified names. User chose a storage-contract check over the exact pin.
+- Implementation: `ClaudeStorageContract` (single anchored derivation, identifier wildcards only, duplicate/missing anchors refuse); `ClaudeRoutingEvidence.storageContractVerified` replaces version/hash (`unexpectedHash` removed); `ClaudeLiveSystem` wires the native installer (`~/.local/bin/claude` → `~/.local/share/claude/versions/*`), the default login Keychain (`Claude Code-credentials` item via persistent-reference replace; manager item `AIControl-claude-logins.v1` with approved-binary ACL), `~/.claude.json` owned-key-only replacement (refuses edits to non-owned keys), the manager lock at `~/Library/Application Support/AIControl`, and process checks that treat any installed Claude version as running. Conflicts: `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`, custom/local OAuth variables, API key/token/Bedrock/Vertex variables, `~/.claude/.credentials.json`, `~/.claude/.config.json`. Enabled only with `AI_CONTROL_CLAUDE_LIVE=1` for both the CLI and the app; otherwise unavailable as before. A running Claude now yields distinct CLI/app copy (`claudeRunning`).
+- Limitations: environment conflicts reflect AI Control's own environment, not the user's shells; only the native installer is supported; the contract checks the storage derivation, not every Claude behavior (refresh/cache semantics remain as researched).
+
+| Evidence | Result |
+|---|---|
+| RED | Focused manager filter failed to compile against missing live types. |
+| GREEN / regression | `env -u AI_CONTROL_KEYCHAIN_TEST_ROOT ./scripts/test`: exit 0, 162 tests/2 suites, 2 opt-in skips; `swift build` complete (existing SecKeychain deprecation warnings); `git diff --check` exit 0. |
+| Real binaries (opt-in) | `AI_CONTROL_CLAUDE_BINARIES=<2.1.274:2.1.280:2.1.282> … --filter installedBuildsSatisfyStorageContract`: pass, under 1 s total. Test fixtures embed the exact derivation bytes of 2.1.274 and 2.1.282 (verified present in those binaries). |
+| Mutation proof | Dropping the versions-directory requirement, the secure-storage override conflict, or the versions-directory process check each failed its test; sources restored byte-identical. |
+| Live read-only smoke | `AI_CONTROL_CLAUDE_LIVE=1 .build/debug/AIControl claude-login list` → "No saved Claude logins.", exit 0, no files created; without the flag → unavailable, exit 3. |
+
+- Remaining for real one-click use (needs the user at the Mac): save two logins (`AI_CONTROL_CLAUDE_LIVE=1 AIControl claude-login save <alias>` after signing in with each account), approve macOS Keychain prompts (G2), run the live A→B→A switch with Claude closed (G5), then decide to enable by default. Nothing committed yet.

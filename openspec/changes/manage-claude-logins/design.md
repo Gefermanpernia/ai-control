@@ -97,7 +97,7 @@ Everything else, including MCP/plugin secrets and shared context, remains untouc
 
 Security adapter selects exactly one generic-password persistent reference: service `Claude Code-credentials`, account derived exactly per research V1. `SecItemUpdate` changes data only, retaining attributes/ACL; never delete/re-add. Manager service `AIControl-claude-logins.v1`, account UID, ACL restricted to approved binary. No plaintext archives, token argv/logs, or shell.
 
-Require research W5 ARM 2.1.252 hash/default resolver. Reject overrides, legacy/fallback/alternate-auth involvement, `enterpriseGateway`/`designOauth` presence, unclassified account-bound state, and denied/cancelled/locked/ambiguous/corrupt storage or missing active resources.
+Require a verified storage contract and default resolver. User decision 2026-09-25 replaces the exact W5 2.1.252 hash pin, which Claude Code auto-updates defeat within days: the native-installer executable must contain the reviewed credential-storage derivation (service template, override variables, `USER`/`claude-code-user` account rule) with only minified identifiers varying; anything else fails closed as an unsupported build. Reject overrides, legacy/fallback/alternate-auth involvement, `enterpriseGateway`/`designOauth` presence, unclassified account-bound state, and denied/cancelled/locked/ambiguous/corrupt storage or missing active resources.
 
 Document adapter patches latest raw JSON via protected same-directory temporary file, fsync/rename/fsync; preserves numbers, owner/mode/ACL. Reject symlinks, changed content/identity/protections; verify preservation. Bound size/depth; validate OAuth structure without token decoding. Keychain roots also retain raw unrelated values.
 
