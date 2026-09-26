@@ -90,7 +90,7 @@ struct ClaudeLiveSystem {
     func makeBackend(managerExecutable: String) -> any ClaudeLoginBackend {
         let preflight = ClaudeProcessPreflight(
             expectedUID: geteuid(), trustedExecutablePath: resolveExecutable(launcherPath) ?? launcherPath,
-            probe: .system(), trustedExecutableDirectory: versionsDirectory
+            probe: .system(), trustedExecutableDirectory: versionsDirectory, permitsOpenSessions: true
         )
         let custody = { (guardMutation: @escaping () throws -> Void) in
             ClaudeLoginCustody(store: try Self.managerStore(beforeMutation: guardMutation))

@@ -526,7 +526,7 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.store.updateCount == managerWrites + 4)
         #expect(fixture.resources.events.count == resourceWrites + 4)
         #expect(try fixture.custody.load().activeAlias == "alpha")
-        #expect(fixture.messages == ["Applied alias alpha; restart Claude before use."])
+        #expect(fixture.messages == ["Applied alias alpha."])
     }
 
     @Test("Use checkpoints the actual outgoing login before selecting the target")
@@ -545,7 +545,7 @@ struct ClaudeLoginManagerTests {
         #expect(try fixture.custody.load().activeAlias == "beta")
         #expect(fixture.resources.secureRoot == fixture.betaSecure)
         #expect(fixture.resources.configurationRoot == fixture.betaConfiguration)
-        #expect(messages == ["Applied alias beta; restart Claude before use."])
+        #expect(messages == ["Applied alias beta."])
     }
 
     @Test("A2 to B to A restores exact presence and preserves unrelated JSON")
@@ -614,7 +614,7 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.resources.secureRoot == fixture.alpha2Secure)
         #expect(fixture.resources.configurationRoot == fixture.alpha2ConfigurationWithoutCaches)
         #expect(try fixture.custody.load() == expectedState)
-        #expect(fixture.messages == ["Applied alias alpha; restart Claude before use."])
+        #expect(fixture.messages == ["Applied alias alpha."])
     }
 
     @Test("Selecting a dead outgoing alias checkpoints its exact presence without credential writes", arguments: DeadOutgoingCredentials.allCases)
@@ -657,7 +657,7 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.resources.secureRoot == credentials.expectedBetaSecure)
         #expect(fixture.resources.configurationRoot == fixture.betaConfiguration)
         #expect(fixture.resources.events == ["secure-write", "secure-readback", "configuration-write", "configuration-readback"])
-        #expect(fixture.messages == ["Applied alias beta; restart Claude before use."])
+        #expect(fixture.messages == ["Applied alias beta."])
     }
 
     @Test("Selection admission refuses malformed, ambiguous, unmatched, and duplicate controls without writes", arguments: SelectionAdmissionRefusal.allCases)
@@ -2728,7 +2728,7 @@ struct ClaudeLoginManagerTests {
         ], lastSelectedHint: "alpha")))
         try await #require(store.selectClaudeLogin("beta")).value
 
-        #expect(store.claudeNotice?.text == "Applied beta. Restart Claude before use.")
+        #expect(store.claudeNotice?.text == "Switched Claude to beta.")
         #expect(try fixture.custody.load().activeAlias == "beta")
         #expect(fixture.resources.secureRoot == fixture.betaSecure)
         let published = "\(store.claudeLogins) \(String(describing: store.claudeNotice))"
@@ -2927,6 +2927,42 @@ struct ClaudeLoginManagerTests {
         }
         try preflight("/Applications/Claude.app/Contents/MacOS/Claude").requireQuiescent()
         try preflight("/usr/local/bin/claudette").requireQuiescent()
+    }
+
+    @Test("A stale configuration re-saves the live login under the alias applied last, with that alias's profile")
+    func staleConfigurationTrustsLastAppliedAlias() throws {
+        let fixture = try SelectionFixture(staleConfiguration: true)
+        defer { fixture.cleanup() }
+        let saved = try fixture.custody.load().snapshots
+
+        #expect(fixture.run(alias: "beta") == 0, "\(fixture.messages)")
+        let state = try fixture.custody.load()
+        #expect(state.snapshots["beta"] == saved["beta"])
+        #expect(state.snapshots["alpha"]?.oauthAccount == saved["alpha"]?.oauthAccount)
+        #expect(state.snapshots["alpha"]?.claudeAiOauth == fixture.alpha2.claudeAiOauth)
+        #expect(state.activeAlias == "beta" && state.journal == nil)
+        #expect(fixture.resources.secureRoot == fixture.betaSecure)
+    }
+
+    @Test("Reselecting the alias applied last repairs a stale configuration and keeps the live login")
+    func reselectingLastAppliedAliasRepairsConfiguration() throws {
+        let fixture = try SelectionFixture(staleConfiguration: true)
+        defer { fixture.cleanup() }
+        let secure = fixture.resources.secureRoot
+
+        #expect(fixture.run(alias: "alpha") == 0, "\(fixture.messages)")
+        #expect(try ClaudeLoginOwnedFields.capture(.init(secure: secure, configuration: "{}")).secure
+            == ClaudeLoginOwnedFields.capture(.init(secure: fixture.resources.secureRoot, configuration: "{}")).secure)
+        #expect(fixture.resources.configurationRoot.contains(#""accountUuid":"account-a""#))
+    }
+
+    @Test("Open Claude sessions are allowed when the preflight permits them")
+    func preflightCanPermitOpenSessions() throws {
+        let running = [ClaudeProcessRecord(pid: 9, parentPID: 1, uid: 501, executablePath: "/v/claude", role: nil)]
+        var preflight = ClaudeProcessPreflight.testing(running)
+        #expect(throws: ClaudeProcessPreflightError.active) { try preflight.requireQuiescent() }
+        preflight.permitsOpenSessions = true
+        try preflight.requireQuiescent()
     }
 
     @Test("Live switching stays off unless explicitly enabled")
@@ -3310,7 +3346,7 @@ private final class SelectionFixture {
         failure: SelectionFailure? = nil, deadTarget: Bool = false, deadOutgoing: DeadOutgoingCredentials? = nil,
         unsupportedRoot: UnsupportedSelectionRoot? = nil, failInitialization: Bool = false,
         onDirectoryOwned: ((URL) -> Void)? = nil, guardFailure: SelectionGuardFailure? = nil,
-        verifyLockContention: Bool = false, failedProcessCheck: Int? = nil
+        verifyLockContention: Bool = false, failedProcessCheck: Int? = nil, staleConfiguration: Bool = false
     ) throws {
         directory = try disposableDirectory("selection")
         onDirectoryOwned?(directory)
@@ -3321,6 +3357,7 @@ private final class SelectionFixture {
         var outgoingConfiguration = alpha2Configuration
         if let deadOutgoing { outgoingSecure = deadOutgoing.secureRoot }
         if unsupportedRoot == .enterpriseGateway { outgoingSecure = try ScopedJSON(outgoingSecure).replacing(["enterpriseGateway": .value("true")]) }
+        if staleConfiguration { outgoingConfiguration = betaConfiguration }
         if unsupportedRoot == .designOauth { outgoingConfiguration = try ScopedJSON(outgoingConfiguration).replacing(["designOauth": .value("true")]) }
         alpha2 = try ClaudeLoginSnapshot.capture(
             secureRoot: outgoingSecure, configurationRoot: outgoingConfiguration

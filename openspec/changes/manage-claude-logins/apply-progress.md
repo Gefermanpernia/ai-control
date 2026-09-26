@@ -748,3 +748,12 @@ Separate decisions remain synthetic-first 4.7 (no real switching), native macOS 
 | Live read-only smoke | `AI_CONTROL_CLAUDE_LIVE=1 .build/debug/AIControl claude-login list` → "No saved Claude logins.", exit 0, no files created; without the flag → unavailable, exit 3. |
 
 - Remaining for real one-click use (needs the user at the Mac): save two logins (`AI_CONTROL_CLAUDE_LIVE=1 AIControl claude-login save <alias>` after signing in with each account), approve macOS Keychain prompts (G2), run the live A→B→A switch with Claude closed (G5), then decide to enable by default. Nothing committed yet.
+
+### Open Sessions Allowed — Last-Applied Alias Names the Live Login
+
+- User decision (2026-09-26): switching must not require quitting Claude sessions; in the user's experience running sessions pick up a login changed elsewhere and retry. The live preflight now sets `permitsOpenSessions`; process checks stay available for tests and non-live backends.
+- Outgoing checkpoint rule: configuration agrees with the alias applied last → full checkpoint (unchanged); configuration names another saved alias → trust the alias applied last, re-saving only the live Keychain login with that alias's own stored profile (refused if identities disagree); configuration names an unknown or unreadable account → refuse without writes (likely a native login that should be saved first). With no last-applied alias the previous identity-match rule applies.
+- Codec: the journal no longer requires the live configuration `oauthAccount` to equal the source snapshot's; the secure before-image binding stays.
+- Copy: CLI "Applied alias X."; app "Switched Claude to X." (no restart claim).
+- Evidence: full `./scripts/test` exit 0, 171 tests/2 suites, 2 opt-in skips; existing admission refusals (unknown and unreadable identity) still refuse; new tests cover stale configuration, reselecting the last-applied alias, and the preflight flag.
+- Not proven: that every open session re-reads the switched login without error; the earlier 13:03/13:26 configuration rewrites were not attributed to a specific process.

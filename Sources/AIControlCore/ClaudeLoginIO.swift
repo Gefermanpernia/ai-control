@@ -256,7 +256,6 @@ struct ClaudeLoginEnvelopeCodec {
                   Set(journal.before.configuration.keys) == Set(["oauthAccount"] + ClaudeConfigurationPatch.accountCacheKeys),
                   Set(journal.after.configuration.keys) == Set(journal.before.configuration.keys),
                   journal.before.secure == ClaudeLoginOwnedFields.target(source).secure,
-                  journal.before.configuration["oauthAccount"] == source.oauthAccount,
                   journal.after == ClaudeLoginOwnedFields.target(target),
                   journal.phase != .committed || state.activeAlias == journal.target else {
                 throw ClaudeLoginEnvelopeError.invalid
@@ -1042,8 +1041,11 @@ struct ClaudeProcessPreflight {
     let probe: NativeProcessProbe
     /// Any executable inside this directory is Claude too, e.g. older versions still running after an update.
     var trustedExecutableDirectory: String? = nil
+    /// Open Claude sessions re-read the Keychain login, so switching need not wait for them to quit.
+    var permitsOpenSessions = false
 
     func requireQuiescent() throws {
+        if permitsOpenSessions { return }
         let records: [ClaudeProcessRecord]
         do { records = try probe.snapshot() } catch { throw ClaudeProcessPreflightError.uncertain }
         var byPID: [pid_t: ClaudeProcessRecord] = [:]

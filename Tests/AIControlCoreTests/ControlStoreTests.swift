@@ -277,7 +277,7 @@ struct ControlStoreTests {
         #expect(store.recoverClaudeLogins() == nil)
         await task.value
         #expect(store.claudeActivity == .idle)
-        #expect(store.claudeNotice == .init(text: "Applied beta. Restart Claude before use.", offersRecovery: false))
+        #expect(store.claudeNotice == .init(text: "Switched Claude to beta.", offersRecovery: false))
         #expect(store.claudeLogins == .loaded(.init(aliases: [
             .init(name: "alpha", requiresReLogin: false), .init(name: "beta", requiresReLogin: false)
         ], lastSelectedHint: "beta")))
@@ -296,7 +296,7 @@ struct ControlStoreTests {
         await task.value
 
         #expect(store.claudeActivity == .idle)
-        #expect(store.claudeNotice?.text == "Applied beta. Restart Claude before use.")
+        #expect(store.claudeNotice?.text == "Switched Claude to beta.")
     }
 
     @Test("Switch failures stay distinct and never claim unchanged credentials", arguments: ClaudeSwitchFailure.allCases)

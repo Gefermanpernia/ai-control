@@ -217,7 +217,7 @@ final class ControlStore: ObservableObject {
         switch result {
         case .listed: return nil
         case .verifiedApplied(let applied):
-            return .init(text: "Applied \(applied). Restart Claude before use.", offersRecovery: false)
+            return .init(text: "Switched Claude to \(applied).", offersRecovery: false)
         case .recoveryChecked:
             return .init(text: "Recovery check finished. Choose a saved login to switch.", offersRecovery: false)
         case .refused:

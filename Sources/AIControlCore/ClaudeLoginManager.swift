@@ -188,15 +188,34 @@ final class GuardedClaudeLoginBackend: ClaudeLoginBackend {
         let roots = try resources.readRoots()
         try validateSelectionRoots(roots)
         let before = try ClaudeLoginOwnedFields.capture(roots)
-        let current = try ClaudeLoginSnapshot.capture(
-            secureRoot: roots.secure, configurationRoot: roots.configuration
-        )
-        let sources = state.snapshots.filter { $0.value.identity == current.identity }.map(\.key)
-        guard sources.count == 1, let source = sources.first else {
-            throw ClaudeLoginSelectionError.ambiguousOutgoing
+        // Open sessions may rewrite the configuration, so it alone cannot name the live login. The alias
+        // applied last does; the live login is re-saved only when the configuration agrees with it.
+        let current = try? ClaudeLoginSnapshot.capture(secureRoot: roots.secure, configurationRoot: roots.configuration)
+        let matching = current.map { live in state.snapshots.filter { $0.value.identity == live.identity }.map(\.key) } ?? []
+        let source: String
+        if let lastApplied = state.activeAlias, let stored = state.snapshots[lastApplied] {
+            source = lastApplied
+            if let current, matching == [lastApplied] {
+                state.snapshots[source] = current
+            } else if matching.count != 1 {
+                // An unknown or unreadable account suggests a fresh native login: save it first.
+                throw ClaudeLoginSelectionError.ambiguousOutgoing
+            } else {
+                // Keep the alias's own profile; take only the live Keychain login, which Claude refreshes in place.
+                let profile = try ScopedJSON("{}").replacing(["oauthAccount": stored.oauthAccount])
+                guard let refreshed = try? ClaudeLoginSnapshot.capture(secureRoot: roots.secure, configurationRoot: profile),
+                      refreshed.identity == stored.identity else { throw ClaudeLoginSelectionError.ambiguousOutgoing }
+                state.snapshots[source] = refreshed
+            }
+            try saveState(state)
+        } else {
+            guard let current, matching.count == 1, let only = matching.first else {
+                throw ClaudeLoginSelectionError.ambiguousOutgoing
+            }
+            source = only
+            state.snapshots[source] = current
+            try saveState(state)
         }
-        state.snapshots[source] = current
-        try saveState(state)
         guard let target = state.snapshots[alias], target.usability == .usable else {
             throw ClaudeLoginSelectionError.reLoginNeeded
         }
@@ -619,7 +638,7 @@ private extension ClaudeLoginCommand {
 
 private func use(alias: String, backend: any ClaudeLoginBackend, output: (String) -> Void) throws -> Int32 {
     try backend.selectAlias(alias)
-    output("Applied alias \(alias); restart Claude before use.")
+    output("Applied alias \(alias).")
     return 0
 }
 
