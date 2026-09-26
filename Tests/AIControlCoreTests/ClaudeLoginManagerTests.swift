@@ -177,7 +177,7 @@ struct ClaudeLoginManagerTests {
 
         #expect(exit == 2)
         #expect(backendCreations == 0)
-        #expect(messages == ["Usage: AIControl claude-login save <alias> | list | use <alias> | recover"])
+        #expect(messages == ["Usage: AIControl claude-login save <alias> | list | use <alias> | rename <alias> <new-alias> | recover"])
     }
 
     @Test("Aliases with a trailing newline are rejected by commands and the envelope")
@@ -190,6 +190,32 @@ struct ClaudeLoginManagerTests {
         }
         let state = ClaudeLoginState(snapshots: ["alpha\n": try snapshot(account: "a")])
         #expect(throws: ClaudeLoginEnvelopeError.invalid) { try ClaudeLoginEnvelopeCodec().encode(state) }
+    }
+
+    @Test("Rename moves a saved login and its last-selected mark without touching credentials")
+    func renameMovesSavedLogin() throws {
+        let alpha = try snapshot(account: "account-a")
+        let backend = RecordingClaudeLoginBackend(
+            state: .init(snapshots: ["alpha": alpha, "beta": try snapshot(account: "account-b")], activeAlias: "alpha"),
+            current: try snapshot(account: "unused")
+        )
+        var messages: [String] = []
+        func run(_ arguments: String...) -> Int32 {
+            runClaudeLogins(arguments: ["claude-login"] + arguments, makeBackend: { backend }, output: { messages.append($0) }, runGUI: {})
+        }
+
+        #expect(run("rename", "alpha", "gamma") == 0)
+        #expect(backend.state.snapshots["gamma"] == alpha && backend.state.snapshots["alpha"] == nil)
+        #expect(backend.state.activeAlias == "gamma")
+        #expect(backend.currentCount == 0)
+        #expect(run("rename", "gamma", "beta") == 3)
+        #expect(run("rename", "missing", "delta") == 3)
+        #expect(run("rename", "gamma", "Bad") == 2)
+        #expect(backend.savedStates.count == 1)
+        #expect(messages == [
+            "Renamed alias alpha to gamma.", "Blocked: alias beta is already saved.", "Blocked: alias is not saved.",
+            "Usage: AIControl claude-login save <alias> | list | use <alias> | rename <alias> <new-alias> | recover"
+        ])
     }
 
     @Test("Manual second login enrollment ignores a stale active marker")

@@ -536,12 +536,16 @@ private enum ClaudeLoginCommand {
     case save(String)
     case list
     case use(String)
+    case rename(String, String)
     case recover
 
     init?(arguments: [String]) {
         switch arguments {
         case ["claude-login", "list"]: self = .list
         case ["claude-login", "recover"]: self = .recover
+        case let arguments where arguments.count == 4 && arguments[0] == "claude-login" && arguments[1] == "rename":
+            guard Self.valid(arguments[2]), Self.valid(arguments[3]) else { return nil }
+            self = .rename(arguments[2], arguments[3])
         default:
             guard arguments.count == 3, arguments[0] == "claude-login",
                   Self.valid(arguments[2]) else { return nil }
@@ -580,7 +584,7 @@ func runClaudeLogins(
         return 0
     }
     guard let command = ClaudeLoginCommand(arguments: arguments) else {
-        output("Usage: AIControl claude-login save <alias> | list | use <alias> | recover")
+        output("Usage: AIControl claude-login save <alias> | list | use <alias> | rename <alias> <new-alias> | recover")
         return 2
     }
     let backend = makeBackend()
@@ -592,6 +596,22 @@ func runClaudeLogins(
             return try backend.perform(command: .list) { try list(backend: $0, output: output) }
         case .use(let alias):
             return try backend.perform(command: .use) { try use(alias: alias, backend: $0, output: output) }
+        case .rename(let alias, let newAlias):
+            return try backend.perform(command: .save) {
+                var state = try $0.loadState()
+                guard let snapshot = state.snapshots.removeValue(forKey: alias) else {
+                    throw ClaudeLoginSelectionError.unknownAlias
+                }
+                guard state.snapshots[newAlias] == nil else {
+                    output("Blocked: alias \(newAlias) is already saved.")
+                    return 3
+                }
+                state.snapshots[newAlias] = snapshot
+                if state.activeAlias == alias { state.activeAlias = newAlias }
+                try $0.saveState(state)
+                output("Renamed alias \(alias) to \(newAlias).")
+                return 0
+            }
         case .recover:
             return try backend.perform(command: .recover) {
                 try $0.recoverPendingLogin()
