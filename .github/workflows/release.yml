@@ -1,0 +1,25 @@
+name: Release
+
+# Push a tag such as v0.1.0 to test, package and publish AI Control.app.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: ./scripts/test
+      - name: Package
+        run: ./scripts/package-app "${GITHUB_REF_NAME#v}"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "dist/AI-Control-${GITHUB_REF_NAME#v}.zip" \
+            --title "AI Control $GITHUB_REF_NAME" --generate-notes

@@ -3024,9 +3024,12 @@ struct ClaudeLoginManagerTests {
 
     @Test("Live switching stays off unless explicitly enabled")
     func liveSwitchingStaysOffByDefault() async {
-        #expect(ClaudeLiveSystem.isEnabled(environment: [:]) == false)
-        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "true"]) == false)
-        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "1"]))
+        #expect(ClaudeLiveSystem.isEnabled(environment: [:], bundlePath: "/repo/.build/debug") == false)
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "true"], bundlePath: "/repo/.build/debug") == false)
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "1"], bundlePath: "/repo/.build/debug"))
+        #expect(ClaudeLiveSystem.isEnabled(environment: [:], bundlePath: "/Applications/AI Control.app"))
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "0"], bundlePath: "/Applications/AI Control.app") == false)
+        #expect(ClaudeLiveSystem.isEnabled(environment: [:], bundlePath: "/tmp/AIControlPackageTests.xctest") == false)
         #expect(await ClaudeLoginAppAdapter.configured(environment: [:]).list() == .backendUnavailable)
     }
 }

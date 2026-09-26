@@ -119,7 +119,15 @@ struct ClaudeLiveSystem {
         )
     }
 
-    static func isEnabled(environment: [String: String]) -> Bool { environment["AI_CONTROL_CLAUDE_LIVE"] == "1" }
+    /// Live switching is on for the installed app, and for development builds only when `aic` asks for it;
+    /// `AI_CONTROL_CLAUDE_LIVE=0` turns it off everywhere.
+    static func isEnabled(environment: [String: String], bundlePath: String = Bundle.main.bundlePath) -> Bool {
+        switch environment["AI_CONTROL_CLAUDE_LIVE"] {
+        case "1": return true
+        case "0": return false
+        default: return bundlePath.hasSuffix(".app")
+        }
+    }
 
     static func configuredBackend(environment: [String: String]) -> (() -> any ClaudeLoginBackend)? {
         guard isEnabled(environment: environment), let executable = Bundle.main.executablePath else { return nil }

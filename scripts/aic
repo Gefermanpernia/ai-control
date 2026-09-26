@@ -9,8 +9,12 @@
 #   aic codex save|use|list|rename ...   the same for Codex
 #   aic codex login <name>               sign in to another Codex account safely and save it
 set -eu
-root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
-binary="$root/.build/debug/AIControl"
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+if [ -x "$here/../MacOS/AIControl" ]; then
+    binary="$here/../MacOS/AIControl"              # inside AI Control.app
+else
+    binary="$here/../.build/debug/AIControl"       # source checkout
+fi
 export AI_CONTROL_CLAUDE_LIVE=1
 if [ $# -eq 0 ]; then
     nohup "$binary" >/dev/null 2>&1 &

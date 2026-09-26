@@ -35,13 +35,36 @@ in your login Keychain and are never sent anywhere.
 ## Requirements
 
 - macOS 13 or later on Apple silicon
-- Swift 5.7 or later (Xcode or the Command Line Tools)
 - Claude Code installed with the native installer (`~/.local/bin/claude`)
 - Codex CLI signed in with ChatGPT
 
 You can use AI Control with only one of the two CLIs.
 
 ## Install
+
+### Download the app (recommended)
+
+1. Download `AI-Control-<version>.zip` from the
+   [latest release](https://github.com/Gefermanpernia/ai-control/releases/latest).
+2. Unzip it and drag **AI Control** into your **Applications** folder.
+3. The first time, **right-click AI Control and choose Open**, then **Open** again.
+   AI Control is not signed by Apple, so macOS asks once before running it.
+   If macOS still refuses, run
+   `xattr -dr com.apple.quarantine "/Applications/AI Control.app"` and open it again.
+4. *Optional:* to use the `aic` terminal command, run
+
+   ```sh
+   mkdir -p ~/.local/bin
+   ln -s "/Applications/AI Control.app/Contents/Resources/aic" ~/.local/bin/aic
+   ```
+
+To start AI Control when you log in, add it in **System Settings → General →
+Login Items**. To update, quit AI Control (⚙ → **Quit AI Control**) and replace
+the app with the one from the newest release.
+
+### Build from source
+
+Requires Swift 5.7 or later.
 
 **1. Install Apple's developer tools** (skip this if you already have Xcode):
 
@@ -73,41 +96,31 @@ export PATH="$HOME/.local/bin:$PATH"
 
 **4. Start it** with `aic`, then follow [Getting started](#getting-started).
 
-### Update
-
-```sh
-cd ai-control
-git pull
-swift build
-```
-
-`aic` runs the build in `.build/debug`, so restart AI Control after building:
-open the menu, click ⚙ and **Quit AI Control**, then run `aic` again.
+To update a source build, run `git pull` and `swift build`, then restart AI
+Control: ⚙ → **Quit AI Control**, then `aic`.
 
 ### Uninstall
 
-Removing AI Control leaves your CLIs signed in to their current accounts. To
-remove it together with the logins it saved:
+Removing AI Control leaves your CLIs signed in to their current accounts. Quit
+AI Control (⚙ → **Quit AI Control**), then remove it together with the logins it
+saved:
 
 ```sh
-pkill -f .build/debug/AIControl
 rm ~/.local/bin/aic
 security delete-generic-password -s AIControl-claude-logins.v2
 security delete-generic-password -s AIControl-codex-logins.v1
 rm -r ~/Library/Application\ Support/AIControl
 ```
 
-Then delete the `ai-control` folder.
+Finally delete **AI Control** from Applications, or the `ai-control` folder if
+you built it from source.
 
 ## Getting started
 
 ### 1. Open the menu
 
-```sh
-aic
-```
-
-The AI Control icon appears in the menu bar. Click it to open the menu.
+Open **AI Control** from Applications (or run `aic`). Its icon appears in the
+menu bar; click it to open the menu.
 
 ### 2. Add your accounts
 
@@ -199,7 +212,7 @@ change — stops the switch before it writes anything.
 
 ## Limitations
 
-- Development build only: unsigned, run from `.build/debug`.
+- Not signed by Apple, so macOS asks for confirmation the first time it opens.
 - Claude Code must come from the native installer; other installs are refused.
 - When a Claude Code update changes how logins are stored, switching stops until
   the new build is reviewed.
@@ -211,7 +224,11 @@ change — stops the switch before it writes anything.
 ./scripts/test                          # full test suite
 ./scripts/test --filter CodexLoginTests # one suite
 .build/debug/AIControl render-screenshots docs/images   # regenerate README images
+./scripts/package-app 0.1.0             # build dist/AI-Control-0.1.0.zip
 ```
+
+Pushing a tag such as `v0.1.0` makes GitHub Actions run the tests, package the
+app and publish it as a release.
 
 Tests use synthetic logins and temporary directories; they never read real
 credentials. The README images are drawn from built-in example accounts, never
