@@ -665,7 +665,15 @@ struct SavedLoginRow: View {
                             .font(.caption2.weight(.semibold)).foregroundStyle(.tint)
                     }
                 }
-                Label(detail, systemImage: symbol).foregroundStyle(tint).font(.caption2).lineLimit(1)
+                HStack {
+                    Label(detail, systemImage: symbol).foregroundStyle(tint).font(.caption2).lineLimit(1)
+                    Spacer(minLength: 8)
+                    if case .usage(let usage) = usage, let resets = usage.resetsAvailable {
+                        Label("\(resets) reset\(resets == 1 ? "" : "s")", systemImage: "arrow.counterclockwise")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                            .accessibilityLabel(Text("\(resets) rate-limit resets available"))
+                    }
+                }
                 usageView
             }
             Spacer(minLength: 8)
@@ -685,32 +693,37 @@ struct SavedLoginRow: View {
 }
 
 extension SavedLoginRow {
+    /// Windows sit in fixed columns so bars line up across rows; a missing window leaves its column empty.
     @ViewBuilder var usageView: some View {
         switch usage {
         case .usage(let usage):
-            HStack(spacing: 10) {
-                ForEach(usage.windows, id: \.label) { window in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(window.label) \(Int(window.usedPercent.rounded()))%\(Self.reset(window.resetsAt))")
-                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                            .lineLimit(1).fixedSize()
-                        ProgressView(value: min(window.usedPercent, 100), total: 100)
-                            .progressViewStyle(.linear)
-                            .tint(window.usedPercent >= 90 ? .red : window.usedPercent >= 70 ? .orange : .accentColor)
-                            .frame(width: 96)
-                            .accessibilityLabel(Text("\(window.label) usage"))
-                            .accessibilityValue(Text("\(Int(window.usedPercent.rounded())) percent"))
+            let known = ["5h", "Week"]
+            let extra = usage.windows.map(\.label).filter { !known.contains($0) }
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(known + extra, id: \.self) { label in
+                    Group {
+                        if let window = usage.windows.first(where: { $0.label == label }) { windowView(window) } else { Color.clear }
                     }
-                }
-                if let resets = usage.resetsAvailable {
-                    Label("\(resets) reset\(resets == 1 ? "" : "s")", systemImage: "arrow.counterclockwise")
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    .frame(width: 138, alignment: .leading)
                 }
             }
         case .unavailable(let reason):
             Text(reason).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
         case nil:
             EmptyView()
+        }
+    }
+
+    private func windowView(_ window: LoginUsage.Window) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(window.label) \(Int(window.usedPercent.rounded()))%\(Self.reset(window.resetsAt))")
+                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.85)
+            ProgressView(value: min(window.usedPercent, 100), total: 100)
+                .progressViewStyle(.linear)
+                .tint(window.usedPercent >= 90 ? .red : window.usedPercent >= 70 ? .orange : .accentColor)
+                .accessibilityLabel(Text("\(window.label) usage"))
+                .accessibilityValue(Text("\(Int(window.usedPercent.rounded())) percent"))
         }
     }
 
