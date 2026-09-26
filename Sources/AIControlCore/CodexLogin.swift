@@ -180,6 +180,19 @@ struct CodexLoginManager {
 
     func savedLogins() throws -> [String: Data] { try load().logins }
 
+    /// Saves a renewed copy of a saved login, only if it still belongs to the same account.
+    func replaceSaved(_ alias: String, with login: Data) throws {
+        let lock = try system.acquireLock()
+        defer { lock.release() }
+        var state = try load()
+        guard let saved = state.logins[alias] else { throw CodexLoginError.unknownAlias }
+        guard try CodexAuthFile.identity(saved).accountID == CodexAuthFile.identity(login).accountID else {
+            throw CodexLoginError.aliasTaken
+        }
+        state.logins[alias] = login
+        try persist(state)
+    }
+
     private func alias(for identity: CodexLoginIdentity, in state: CodexLoginState) -> String? {
         state.logins.first { (try? CodexAuthFile.identity($0.value))?.accountID == identity.accountID }?.key
     }
@@ -271,6 +284,8 @@ struct CodexAppServices {
     let fetch: (URLRequest) async throws -> Data
     /// Runs Codex's own sign-in; throws when it does not finish.
     let signIn: () throws -> Void
+    /// Has Codex refresh a saved login in isolation and returns the refreshed copy.
+    let renew: (Data) throws -> Data
     var now: () -> Date = Date.init
 }
 
@@ -285,8 +300,8 @@ actor CodexLoginAppAdapter {
         self.services = services
     }
 
-    /// Usage per saved alias, from auth.json for the live account and saved logins otherwise.
-    /// An expired saved login is not refreshed here: refreshing rotates it, which only Codex should do.
+    /// Usage per saved alias, from auth.json for the live account and saved logins otherwise. An expired
+    /// saved login that is not live is first renewed by Codex itself in isolation and saved again.
     func usage() async -> [String: LoginUsageResult] {
         guard let manager, let services, let saved = try? manager.savedLogins() else { return [:] }
         let live = manager.system.liveData()
@@ -294,14 +309,18 @@ actor CodexLoginAppAdapter {
         var results: [String: LoginUsageResult] = [:]
         for (alias, login) in saved {
             let account = (try? CodexAuthFile.identity(login))?.accountID
-            let data = account != nil && account == liveAccount ? live! : login
+            let isLive = account != nil && account == liveAccount
+            var data = isLive ? live! : login
+            if !isLive && !Self.isFresh(data, at: services.now()) {
+                guard let renewed = try? services.renew(login), (try? manager.replaceSaved(alias, with: renewed)) != nil else {
+                    results[alias] = .unavailable("Use this account once to refresh its usage.")
+                    continue
+                }
+                data = renewed
+            }
             guard let tokens = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["tokens"] as? [String: Any],
                   let token = tokens["access_token"] as? String, let accountID = tokens["account_id"] as? String else {
                 results[alias] = .unavailable("This login needs a new sign-in.")
-                continue
-            }
-            guard let expiry = Self.expiry(ofJWT: token), expiry.timeIntervalSince(services.now()) > 300 else {
-                results[alias] = .unavailable("Use this account once to refresh its usage.")
                 continue
             }
             do {
@@ -312,6 +331,19 @@ actor CodexLoginAppAdapter {
             }
         }
         return results
+    }
+
+    /// Has Codex refresh a saved login that is not the live one, and saves the refreshed login.
+    func renew(alias: String) -> LoginEditResult {
+        guard let manager, let services else { return .blocked("Login switching is off. Start AI Control with aic.") }
+        guard let saved = (try? manager.savedLogins())?[alias] else { return .blocked("Blocked: no Codex login is saved as \(alias).") }
+        if let live = manager.liveIdentity(), (try? CodexAuthFile.identity(saved))?.accountID == live.accountID {
+            return .blocked("\(alias) is the live Codex login; Codex keeps it renewed.")
+        }
+        guard let renewed = try? services.renew(saved), (try? manager.replaceSaved(alias, with: renewed)) != nil else {
+            return .blocked("Codex could not renew \(alias); its saved login is unchanged unless Codex already rotated it.")
+        }
+        return .done("Renewed Codex login \(alias).")
     }
 
     /// Detaches the live login so codex login cannot revoke it, signs in, and saves the new account;
@@ -342,6 +374,12 @@ actor CodexLoginAppAdapter {
         } catch let error as CodexLoginError {
             return .blocked(error.message(name: error == .aliasTaken ? newAlias : alias, liveEmail: nil))
         } catch { return .blocked("Blocked: saved Codex logins are unavailable.") }
+    }
+
+    private static func isFresh(_ login: Data, at now: Date) -> Bool {
+        let tokens = (try? JSONSerialization.jsonObject(with: login) as? [String: Any])?["tokens"] as? [String: Any]
+        guard let token = tokens?["access_token"] as? String, let expiry = expiry(ofJWT: token) else { return false }
+        return expiry.timeIntervalSince(now) > 300
     }
 
     private static func expiry(ofJWT token: String) -> Date? {
@@ -379,4 +417,47 @@ actor CodexLoginAppAdapter {
     }
 
     private var manager: CodexLoginManager? { makeSystem.map { CodexLoginManager(system: $0()) } }
+}
+
+/// Lets the official Codex CLI refresh a saved login whose access has expired.
+///
+/// Codex runs one tiny request with a copy of the login in a throwaway `CODEX_HOME`, so `~/.codex` is never
+/// touched. The copy is marked stale so Codex always refreshes it; Codex rotates the refresh token as it
+/// refreshes, so the refreshed login is returned for saving before the directory is removed.
+struct CodexIsolatedRenewal {
+    enum Error: Swift.Error, Equatable { case notALogin, codexFailed, accountChanged }
+
+    let codexExecutable: String
+    let run: ClaudeIsolatedRenewal.Runner
+
+    func renew(_ login: Data) throws -> Data {
+        guard let identity = try? CodexAuthFile.identity(login),
+              var root = try JSONSerialization.jsonObject(with: login) as? [String: Any],
+              var tokens = root["tokens"] as? [String: Any] else { throw Error.notALogin }
+        // An unreadable access token and an old refresh date make Codex refresh before its first request.
+        tokens["access_token"] = "expired"
+        root["tokens"] = tokens
+        root["last_refresh"] = "2000-01-01T00:00:00Z"
+        let directory = try FileManager.default.url(
+            for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: FileManager.default.temporaryDirectory, create: true
+        ).path
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let authPath = directory + "/auth.json"
+        guard FileManager.default.createFile(
+            atPath: authPath, contents: try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys, .withoutEscapingSlashes]),
+            attributes: [.posixPermissions: 0o600]
+        ) else { throw Error.codexFailed }
+
+        var environment = ["HOME": NSHomeDirectory(), "CODEX_HOME": directory, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+        for name in ["USER", "LOGNAME", "LANG", "TMPDIR"] { environment[name] = ProcessInfo.processInfo.environment[name] }
+        // The exit status does not matter: a refresh can succeed even if the request after it fails.
+        _ = try? run(codexExecutable, ["exec", "--skip-git-repo-check", "-s", "read-only", "Reply with exactly: OK"], environment, directory)
+
+        // A refresh replaces the placeholder access token; if it is still there, nothing was renewed.
+        guard let renewed = FileManager.default.contents(atPath: authPath),
+              let renewedTokens = (try? JSONSerialization.jsonObject(with: renewed) as? [String: Any])?["tokens"] as? [String: Any],
+              renewedTokens["access_token"] as? String != "expired" else { throw Error.codexFailed }
+        guard (try? CodexAuthFile.identity(renewed))?.accountID == identity.accountID else { throw Error.accountChanged }
+        return renewed
+    }
 }

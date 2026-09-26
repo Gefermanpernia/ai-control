@@ -157,7 +157,8 @@ func runAsyncReport(arguments: [String], output: @escaping @Sendable (String) ->
     Task {
         defer { done.signal() }
         if arguments.count == 3 {
-            switch await claude.renew(alias: arguments[2]) {
+            let result = arguments[0] == "codex-login" ? await codex.renew(alias: arguments[2]) : await claude.renew(alias: arguments[2])
+            switch result {
             case .done(let text): output(text)
             case .blocked(let text): output(text); status.value = 3
             }

@@ -268,7 +268,7 @@ struct CodexAppServicesTests {
         var accounts: [String] = []
         let adapter = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
             fetch: { request in accounts.append(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") ?? ""); return self.usageBody },
-            signIn: {}
+            signIn: {}, renew: { _ in throw FixtureFailure() }
         ))
 
         let usage = await adapter.usage()
@@ -279,6 +279,40 @@ struct CodexAppServicesTests {
         #expect(work.resetsAvailable == 2 && work.windows.first?.usedPercent == 3)
     }
 
+    @Test("An expired saved Codex login is renewed, saved again, and then used for usage")
+    func expiredCodexLoginIsRenewed() async throws {
+        let expired = try auth("acct-c", "c@example.com", access: "old", expires: 1000)
+        let renewed = try auth("acct-c", "c@example.com", access: "new")
+        let fixture = try CodexServicesFixture(saved: ["old": expired])
+        defer { fixture.cleanup() }
+        var renewedLogins: [Data] = []
+        var tokens: [String] = []
+        let adapter = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
+            fetch: { request in tokens.append(request.value(forHTTPHeaderField: "Authorization") ?? ""); return self.usageBody },
+            signIn: {}, renew: { renewedLogins.append($0); return renewed }
+        ))
+
+        let usage = await adapter.usage()
+
+        #expect(renewedLogins == [expired])
+        #expect(try CodexLoginManager(system: fixture.system).savedLogins()["old"] == renewed)
+        #expect(tokens.count == 1 && tokens[0].contains("."))
+        guard case .usage = usage["old"] else { Issue.record("renewed login was not used"); return }
+    }
+
+    @Test("A renewal that returns another account is not saved")
+    func renewalOfAnotherAccountIsRefused() async throws {
+        let expired = try auth("acct-c", "c@example.com", access: "old", expires: 1000)
+        let fixture = try CodexServicesFixture(saved: ["old": expired])
+        defer { fixture.cleanup() }
+        let stranger = try auth("acct-x", "x@example.com", access: "x")
+        let adapter = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
+            fetch: { _ in self.usageBody }, signIn: {}, renew: { _ in stranger }
+        ))
+        #expect(await adapter.usage()["old"] == .unavailable("Use this account once to refresh its usage."))
+        #expect(try CodexLoginManager(system: fixture.system).savedLogins()["old"] == expired)
+    }
+
     @Test("Adding a Codex account clears auth.json only around sign-in and restores the previous login if it fails")
     func addingCodexRestoresOnFailure() async throws {
         let work = try auth("acct-a", "a@example.com", access: "w")
@@ -287,7 +321,7 @@ struct CodexAppServicesTests {
         fixture.live = work
         var sawCleared = false
         let failing = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
-            fetch: { _ in Data() }, signIn: { sawCleared = fixture.live == nil; throw FixtureFailure() }
+            fetch: { _ in Data() }, signIn: { sawCleared = fixture.live == nil; throw FixtureFailure() }, renew: { $0 }
         ))
         #expect(await failing.add(alias: "home") == .blocked("Sign-in did not finish; your previous Codex login is back."))
         #expect(sawCleared)
@@ -295,7 +329,7 @@ struct CodexAppServicesTests {
 
         let home = try auth("acct-b", "b@example.com", access: "h")
         let working = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
-            fetch: { _ in Data() }, signIn: { fixture.live = home }
+            fetch: { _ in Data() }, signIn: { fixture.live = home }, renew: { $0 }
         ))
         #expect(await working.add(alias: "home") == .done("Saved Codex login home (b@example.com)."))
         #expect(await working.rename(alias: "home", to: "house") == .done("Renamed Codex login home to house."))
@@ -338,4 +372,40 @@ private final class CodexServicesMemory: ClaudeLoginDataStore {
     }
     func create(data: Data) throws { self.data = data }
     func update(data: Data) throws { self.data = data }
+}
+
+struct CodexIsolatedRenewalTests {
+    @Test("Renewal runs Codex with a throwaway CODEX_HOME holding an expired copy and returns the refreshed login")
+    func renewalUsesThrowawayHome() throws {
+        let login = Data(#"{"auth_mode":"chatgpt","last_refresh":"2026-09-26T00:00:00Z","tokens":{"id_token":"h.e30.s","access_token":"h.e30.s","refresh_token":"r1","account_id":"acct-a"}}"#.utf8)
+        var seen: (arguments: [String], home: String?, copy: String?)?
+        let renewal = CodexIsolatedRenewal(codexExecutable: "/fake/codex", run: { _, arguments, environment, _ in
+            let home = environment["CODEX_HOME"] ?? ""
+            seen = (arguments, home, try? String(contentsOfFile: home + "/auth.json", encoding: .utf8))
+            try Data(#"{"auth_mode":"chatgpt","last_refresh":"2026-09-27T00:00:00Z","tokens":{"id_token":"h.e30.s","access_token":"new","refresh_token":"r2","account_id":"acct-a"}}"#.utf8)
+                .write(to: URL(fileURLWithPath: home + "/auth.json"))
+            return 0
+        })
+
+        let renewed = try renewal.renew(login)
+
+        #expect(String(decoding: renewed, as: UTF8.self).contains(#""refresh_token":"r2""#))
+        #expect(seen?.arguments.first == "exec")
+        #expect(seen?.copy?.contains(#""refresh_token":"r1""#) == true)
+        #expect(seen?.copy?.contains(#""last_refresh":"2000-01-01T00:00:00Z""#) == true)
+        #expect(!FileManager.default.fileExists(atPath: seen?.home ?? "/"))
+    }
+
+    @Test("Renewal refuses when Codex changed nothing or switched accounts")
+    func renewalRefusesUnchangedOrForeignLogins() throws {
+        let login = Data(#"{"auth_mode":"chatgpt","tokens":{"id_token":"h.e30.s","access_token":"a","refresh_token":"r1","account_id":"acct-a"}}"#.utf8)
+        let unchanged = CodexIsolatedRenewal(codexExecutable: "/fake/codex", run: { _, _, _, _ in 0 })
+        #expect(throws: CodexIsolatedRenewal.Error.codexFailed) { try unchanged.renew(login) }
+        let foreign = CodexIsolatedRenewal(codexExecutable: "/fake/codex", run: { _, _, environment, _ in
+            try Data(#"{"auth_mode":"chatgpt","tokens":{"id_token":"h.e30.s","access_token":"b","refresh_token":"r9","account_id":"acct-z"}}"#.utf8)
+                .write(to: URL(fileURLWithPath: (environment["CODEX_HOME"] ?? "") + "/auth.json"))
+            return 0
+        })
+        #expect(throws: CodexIsolatedRenewal.Error.accountChanged) { try foreign.renew(login) }
+    }
 }

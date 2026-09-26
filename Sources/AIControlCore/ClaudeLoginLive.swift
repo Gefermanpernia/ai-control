@@ -417,12 +417,24 @@ extension ClaudeAppServices {
 
 extension CodexAppServices {
     static var live: Self {
-        .init(fetch: fetchUsage, signIn: {
+        let codex: () throws -> String = {
             let home = NSHomeDirectory()
             let candidates = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
                 + [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
-            guard let codex = candidates.map({ $0 + "/codex" }).first(where: FileManager.default.isExecutableFile(atPath:)),
-                  try runProcess(codex, ["login"], timeout: 600) == 0 else { throw LoginUsage.Error.unreadable }
-        })
+            guard let path = candidates.map({ $0 + "/codex" }).first(where: FileManager.default.isExecutableFile(atPath:)) else {
+                throw LoginUsage.Error.unreadable
+            }
+            return path
+        }
+        return .init(
+            fetch: fetchUsage,
+            signIn: { guard try runProcess(try codex(), ["login"], timeout: 600) == 0 else { throw LoginUsage.Error.unreadable } },
+            renew: { login in
+                try CodexIsolatedRenewal(
+                    codexExecutable: try codex(),
+                    run: { try runProcess($0, $1, environment: $2, directory: $3, timeout: 120) }
+                ).renew(login)
+            }
+        )
     }
 }
