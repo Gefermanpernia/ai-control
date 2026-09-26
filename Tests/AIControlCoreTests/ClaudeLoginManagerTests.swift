@@ -2959,31 +2959,23 @@ struct ClaudeLoginManagerTests {
         try preflight("/usr/local/bin/claudette").requireQuiescent()
     }
 
-    @Test("A stale configuration re-saves the live login under the alias applied last, with that alias's profile")
-    func staleConfigurationTrustsLastAppliedAlias() throws {
-        let fixture = try SelectionFixture(staleConfiguration: true)
+    @Test("After a native login to another saved account, switching re-saves that account, never the last-applied one")
+    func nativeLoginIsCheckpointedUnderItsOwnAlias() throws {
+        let fixture = try SelectionFixture()
         defer { fixture.cleanup() }
-        let saved = try fixture.custody.load().snapshots
-
-        #expect(fixture.run(alias: "beta") == 0, "\(fixture.messages)")
-        let state = try fixture.custody.load()
-        #expect(state.snapshots["beta"] == saved["beta"])
-        #expect(state.snapshots["alpha"]?.oauthAccount == saved["alpha"]?.oauthAccount)
-        #expect(state.snapshots["alpha"]?.claudeAiOauth == fixture.alpha2.claudeAiOauth)
-        #expect(state.activeAlias == "beta" && state.journal == nil)
-        #expect(fixture.resources.secureRoot == fixture.betaSecure)
-    }
-
-    @Test("Reselecting the alias applied last repairs a stale configuration and keeps the live login")
-    func reselectingLastAppliedAliasRepairsConfiguration() throws {
-        let fixture = try SelectionFixture(staleConfiguration: true)
-        defer { fixture.cleanup() }
-        let secure = fixture.resources.secureRoot
+        let saved = try fixture.custody.load()
+        #expect(saved.activeAlias == "alpha")
+        let renewedBeta = fixture.betaSecure.replacingOccurrences(of: #""accessToken":"B""#, with: #""accessToken":"B2""#)
+        fixture.resources.secureRoot = renewedBeta
+        fixture.resources.configurationRoot = fixture.betaConfiguration
 
         #expect(fixture.run(alias: "alpha") == 0, "\(fixture.messages)")
-        #expect(try ClaudeLoginOwnedFields.capture(.init(secure: secure, configuration: "{}")).secure
-            == ClaudeLoginOwnedFields.capture(.init(secure: fixture.resources.secureRoot, configuration: "{}")).secure)
-        #expect(fixture.resources.configurationRoot.contains(#""accountUuid":"account-a""#))
+        let state = try fixture.custody.load()
+        #expect(state.snapshots["alpha"] == saved.snapshots["alpha"])
+        #expect(state.snapshots["beta"]?.claudeAiOauth == (try ClaudeLoginSnapshot.capture(
+            secureRoot: renewedBeta, configurationRoot: fixture.betaConfiguration
+        )).claudeAiOauth)
+        #expect(fixture.resources.secureRoot.contains(#""accessToken":"A1""#))
     }
 
     @Test("Open Claude sessions are allowed when the preflight permits them")
@@ -3376,7 +3368,7 @@ private final class SelectionFixture {
         failure: SelectionFailure? = nil, deadTarget: Bool = false, deadOutgoing: DeadOutgoingCredentials? = nil,
         unsupportedRoot: UnsupportedSelectionRoot? = nil, failInitialization: Bool = false,
         onDirectoryOwned: ((URL) -> Void)? = nil, guardFailure: SelectionGuardFailure? = nil,
-        verifyLockContention: Bool = false, failedProcessCheck: Int? = nil, staleConfiguration: Bool = false
+        verifyLockContention: Bool = false, failedProcessCheck: Int? = nil
     ) throws {
         directory = try disposableDirectory("selection")
         onDirectoryOwned?(directory)
@@ -3387,7 +3379,6 @@ private final class SelectionFixture {
         var outgoingConfiguration = alpha2Configuration
         if let deadOutgoing { outgoingSecure = deadOutgoing.secureRoot }
         if unsupportedRoot == .enterpriseGateway { outgoingSecure = try ScopedJSON(outgoingSecure).replacing(["enterpriseGateway": .value("true")]) }
-        if staleConfiguration { outgoingConfiguration = betaConfiguration }
         if unsupportedRoot == .designOauth { outgoingConfiguration = try ScopedJSON(outgoingConfiguration).replacing(["designOauth": .value("true")]) }
         alpha2 = try ClaudeLoginSnapshot.capture(
             secureRoot: outgoingSecure, configurationRoot: outgoingConfiguration

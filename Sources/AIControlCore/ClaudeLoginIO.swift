@@ -258,6 +258,7 @@ struct ClaudeLoginEnvelopeCodec {
                   Set(journal.before.configuration.keys) == Set(["oauthAccount"] + ClaudeConfigurationPatch.accountCacheKeys),
                   Set(journal.after.configuration.keys) == Set(journal.before.configuration.keys),
                   journal.before.secure == ClaudeLoginOwnedFields.target(source).secure,
+                  journal.before.configuration["oauthAccount"] == source.oauthAccount,
                   journal.after == ClaudeLoginOwnedFields.target(target),
                   journal.phase != .committed || state.activeAlias == journal.target else {
                 throw ClaudeLoginEnvelopeError.invalid
