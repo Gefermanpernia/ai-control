@@ -110,3 +110,7 @@ change — stops the switch before it writes anything.
 
 Tests use synthetic logins and temporary directories; they never read real
 credentials. Design notes and specifications live in `openspec/`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
