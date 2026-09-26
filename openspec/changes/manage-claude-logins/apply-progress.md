@@ -762,7 +762,7 @@ Separate decisions remain synthetic-first 4.7 (no real switching), native macOS 
 
 - Run by the agent from its own open Claude Agent SDK session, with the user's other pi sessions open, at the user's request.
 - Verification: after each `AI_CONTROL_CLAUDE_LIVE=1 .build/debug/AIControl claude-login use <alias>` and an 8 s wait, `GET https://api.anthropic.com/api/oauth/profile` with the live Keychain access token (sent via curl header from stdin, only the account email printed) reported the account; `~/.claude.json` `oauthAccount.emailAddress` and `claude-login list` were read alongside.
-- Results, three round trips: `gerardo` → Anthropic `account B`, config same; `juspit` → Anthropic `account A`, config same; every `use` exit 0, no Keychain prompt, the agent's own session kept working through each switch.
+- Results, three round trips: `gerardo` → Anthropic account B, config same; `juspit` → Anthropic account A, config same; every `use` exit 0, no Keychain prompt, the agent's own session kept working through each switch.
 - Finding: each saved alias is internally consistent (profile matches the login Anthropic reports), but the alias names are the reverse of what the user believed; earlier attributions of configuration rewrites to open sessions were wrong — they were the user's own `use` commands.
 
 ### Incident — Last-Applied Rule Overwrote a Saved Login (2026-09-26 14:04)
