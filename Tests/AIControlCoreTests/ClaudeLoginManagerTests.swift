@@ -1384,7 +1384,7 @@ struct ClaudeLoginManagerTests {
         #expect(store.createCount == 0)
         #expect(store.updateCount == 0)
         #expect(store.data == nil)
-        #expect(messages == ["Blocked: credential backend unavailable."])
+        #expect(messages == ["Blocked: Claude Code is running; quit every session and try again."])
     }
 
     @Test("Source-owned guard refuses manager update through a plain store")
@@ -1405,7 +1405,7 @@ struct ClaudeLoginManagerTests {
         #expect(store.createCount == 0)
         #expect(store.updateCount == 0)
         #expect(store.data == before)
-        #expect(messages == ["Blocked: credential backend unavailable."])
+        #expect(messages == ["Blocked: Claude Code is running; quit every session and try again."])
     }
 
     @Test("Source-owned guards allow exactly one manager creation")
@@ -1809,7 +1809,7 @@ struct ClaudeLoginManagerTests {
         #expect(runClaudeLogins(arguments: ["claude-login", "save", "alpha"], makeBackend: { backend }, output: { messages.append($0) }, runGUI: {}) == 3)
         #expect(store.createCount == (!testCase.existing && testCase.checkToFail == 3 ? 1 : 0))
         #expect(store.updateCount == (testCase.existing && testCase.checkToFail == 3 ? 1 : 0))
-        #expect(messages == ["Blocked: credential backend unavailable."])
+        #expect(messages == ["Blocked: Claude Code is running; quit every session and try again."])
         let reacquired = try ManagerFileLock.acquire(directory: directory.path)
         reacquired.release()
         try FileManager.default.removeItem(at: directory)
@@ -2718,14 +2718,144 @@ struct ClaudeLoginManagerTests {
         let published = "\(store.claudeLogins) \(String(describing: store.claudeNotice))"
         for secret in ["accessToken", "RB", "account-b", "org-b"] { #expect(!published.contains(secret)) }
     }
+    @Test("Storage contract accepts reviewed Claude Code builds whatever their minified names")
+    func storageContractAcceptsReviewedBuilds() {
+        for names in StorageDerivation.reviewedNames {
+            #expect(ClaudeStorageContract.matches(StorageDerivation.binary(names)))
+        }
+    }
+
+    @Test("Storage contract refuses changed, missing, or duplicated credential derivation", arguments: StorageDerivation.Change.allCases)
+    func storageContractRefusesChanges(_ change: StorageDerivation.Change) {
+        #expect(ClaudeStorageContract.matches(change.binary) == false)
+    }
+
+    @Test(
+        "Opt-in: installed Claude Code builds satisfy the storage contract",
+        .enabled(if: ProcessInfo.processInfo.environment["AI_CONTROL_CLAUDE_BINARIES"] != nil)
+    )
+    func installedBuildsSatisfyStorageContract() {
+        let paths = ProcessInfo.processInfo.environment["AI_CONTROL_CLAUDE_BINARIES"]?.split(separator: ":") ?? []
+        #expect(!paths.isEmpty)
+        for path in paths { #expect(ClaudeStorageContract.matches(executableAt: String(path)), "\(path)") }
+    }
+
+    @Test("Live routing reports overrides, alternate auth, and legacy files as conflicts")
+    func liveRoutingReportsConflicts() throws {
+        let clean = LiveSystemFixture().system.routingEvidence()
+        #expect(clean.storageContractVerified)
+        #expect(clean.conflicts.isEmpty)
+        #expect(clean.resolvedConfigurationPath == "/home/me/.claude.json")
+        #expect(clean.defaultConfigurationPath == "/home/me/.claude.json")
+        #expect(clean.environmentUser == "me")
+        #expect(try ClaudeRoutingValidator.route(clean) == .init(
+            service: "Claude Code-credentials", account: "me", configurationPath: "/home/me/.claude.json"
+        ))
+
+        let cases: [(LiveSystemFixture, ClaudeRoutingConflict)] = [
+            (.init(environment: ["CLAUDE_CONFIG_DIR": "/elsewhere"]), .configurationOverride),
+            (.init(environment: ["CLAUDE_SECURESTORAGE_CONFIG_DIR": ""]), .secureStorageOverride),
+            (.init(environment: ["CLAUDE_CODE_CUSTOM_OAUTH_URL": "https://x"]), .customOAuth),
+            (.init(environment: ["CLAUDE_CODE_OAUTH_CLIENT_ID": "id"]), .customOAuth),
+            (.init(environment: ["ANTHROPIC_API_KEY": "k"]), .alternateAuthentication),
+            (.init(environment: ["CLAUDE_CODE_OAUTH_TOKEN": "t"]), .alternateAuthentication),
+            (.init(environment: ["CLAUDE_CODE_USE_BEDROCK": "1"]), .alternateAuthentication),
+            (.init(files: ["/home/me/.claude/.credentials.json"]), .plaintextFallback),
+            (.init(files: ["/home/me/.claude/.config.json"]), .legacyStorage)
+        ]
+        for (fixture, conflict) in cases {
+            #expect(fixture.system.routingEvidence().conflicts == [conflict])
+        }
+    }
+
+    @Test("Live routing verifies only a native-installer build whose storage contract matches")
+    func liveRoutingRequiresVerifiedNativeBuild() {
+        #expect(LiveSystemFixture().checkedExecutables == ["/home/me/.local/share/claude/versions/2.1.282"])
+        #expect(LiveSystemFixture(contractMatches: false).system.routingEvidence().storageContractVerified == false)
+        #expect(LiveSystemFixture(executable: nil).system.routingEvidence().storageContractVerified == false)
+        let foreign = LiveSystemFixture(executable: "/opt/homebrew/lib/node_modules/claude/cli.js")
+        #expect(foreign.system.routingEvidence().storageContractVerified == false)
+        #expect(foreign.checkedExecutables.isEmpty)
+    }
+
+    @Test("Process preflight treats any installed Claude version as active")
+    func preflightDetectsEveryInstalledVersion() throws {
+        func preflight(_ path: String) -> ClaudeProcessPreflight {
+            .init(expectedUID: 501, trustedExecutablePath: "/v/2.1.282", probe: .init(snapshot: {
+                [.init(pid: 9, parentPID: 1, uid: 501, executablePath: path, role: nil)]
+            }), trustedExecutableDirectory: "/v")
+        }
+        #expect(throws: ClaudeProcessPreflightError.active) { try preflight("/v/2.1.274").requireQuiescent() }
+        #expect(throws: ClaudeProcessPreflightError.active) { try preflight("/v/2.1.282").requireQuiescent() }
+        try preflight("/vx/2.1.274").requireQuiescent()
+        try preflight("/usr/bin/zsh").requireQuiescent()
+    }
+
+    @Test("Live configuration replacement writes owned fields only and refuses other edits")
+    func liveConfigurationReplacementIsScoped() throws {
+        let source = #"{"oauthAccount":{"accountUuid":"a"},"keep":900719925474099312345,"modelAccessCache":2}"#
+        let fixture = try ConfigurationFixture(source)
+        defer { fixture.cleanup() }
+        let file = ProtectedConfigurationFile(path: fixture.file.path)
+        let replacement = try ScopedJSON(source).replacing([
+            "oauthAccount": .value(#"{"accountUuid":"b"}"#), "modelAccessCache": .missing
+        ])
+        var guards = 0
+
+        try ClaudeLiveSystem.replaceConfiguration(file, expected: source, replacement: replacement) { guards += 1 }
+
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) == replacement)
+        #expect(guards == 1)
+        let foreign = try ScopedJSON(replacement).replacing(["keep": .value("1")])
+        #expect(throws: ClaudeLoginSelectionError.changedRoots) {
+            try ClaudeLiveSystem.replaceConfiguration(file, expected: replacement, replacement: foreign) { guards += 1 }
+        }
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) == replacement)
+        #expect(guards == 1)
+        let restored = try ScopedJSON(replacement).replacing(["modelAccessCache": .value("2")])
+        try ClaudeLiveSystem.replaceConfiguration(file, expected: replacement, replacement: restored) {}
+        #expect(try String(contentsOf: fixture.file, encoding: .utf8) == restored)
+    }
+
+    @Test("A running Claude session refuses the switch with a distinct result")
+    func appAdapterReportsRunningClaude() async {
+        let adapter = ClaudeLoginAppAdapter(makeBackend: { AppResultBackend(selectionError: ClaudeProcessPreflightError.active) })
+        #expect(await adapter.use(alias: "alpha") == .claudeRunning)
+    }
+
+    @Test("Terminal commands explain a running Claude and an unreviewed Claude build")
+    func commandsExplainRunningClaudeAndUnreviewedBuild() {
+        var messages: [String] = []
+        for error in [ClaudeProcessPreflightError.active as Error, ClaudeRoutingError.unsupportedBuild] {
+            #expect(runClaudeLogins(arguments: ["claude-login", "use", "alpha"], makeBackend: {
+                AppResultBackend(selectionError: error)
+            }, output: { messages.append($0) }, runGUI: {}) == 3)
+        }
+        #expect(messages == [
+            "Blocked: Claude Code is running; quit every session and try again.",
+            "Blocked: this Claude Code build stores logins differently from reviewed builds."
+        ])
+    }
+
+    @Test("Live switching stays off unless explicitly enabled")
+    func liveSwitchingStaysOffByDefault() async {
+        #expect(ClaudeLiveSystem.isEnabled(environment: [:]) == false)
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "true"]) == false)
+        #expect(ClaudeLiveSystem.isEnabled(environment: ["AI_CONTROL_CLAUDE_LIVE": "1"]))
+        #expect(await ClaudeLoginAppAdapter.configured(environment: [:]).list() == .backendUnavailable)
+    }
 }
 
 private struct AppResultBackend: ClaudeLoginBackend {
     var cleanupUncertain = false
+    var selectionError: Error?
     func loadState() throws -> ClaudeLoginState { .init() }
     func currentSnapshot() throws -> ClaudeLoginSnapshot { throw FixtureError() }
     func saveState(_: ClaudeLoginState) throws {}
-    func selectAlias(_: String) throws { if cleanupUncertain { throw ClaudeLoginSelectionError.cleanupUncertain } }
+    func selectAlias(_: String) throws {
+        if let selectionError { throw selectionError }
+        if cleanupUncertain { throw ClaudeLoginSelectionError.cleanupUncertain }
+    }
     func recoverPendingLogin() throws {}
 }
 
@@ -3643,6 +3773,36 @@ enum ConfigurationPresence: CaseIterable {
     }
 }
 
+private final class LiveSystemFixture {
+    private(set) var checkedExecutables: [String] = []
+    private let environment: [String: String]
+    private let files: Set<String>
+    private let executable: String?
+    private let contractMatches: Bool
+
+    init(
+        environment: [String: String] = [:], files: Set<String> = [],
+        executable: String? = "/home/me/.local/share/claude/versions/2.1.282", contractMatches: Bool = true
+    ) {
+        self.environment = environment.merging(["USER": "me"]) { current, _ in current }
+        self.files = files
+        self.executable = executable
+        self.contractMatches = contractMatches
+        _ = system.routingEvidence()
+    }
+
+    var system: ClaudeLiveSystem {
+        .init(
+            home: "/home/me", environment: environment, operatingSystemUser: "me",
+            fileExists: { [files] in files.contains($0) },
+            resolveExecutable: { [executable] in $0 == "/home/me/.local/bin/claude" ? executable : nil },
+            storageContractMatches: { self.checkedExecutables.append($0); return self.contractMatches }
+        )
+    }
+}
+
+enum StorageDerivation {}
+
 private final class ConfigurationFixture {
     let directory: URL
     let file: URL
@@ -3684,14 +3844,13 @@ private func fileInode(_ file: URL) throws -> ino_t {
 
 private extension ClaudeRoutingEvidence {
     static func testing(
-        version: String = "2.1.252",
-        hash: String = "b661c6a094fcc32656bf7c0071c5b45bf900b34d4f0a1ab3d78fd59aeba2c2c7",
+        storageContractVerified: Bool = true,
         path: String = "/synthetic/home/.claude.json",
         environmentUser: String? = "fixture-user",
         conflicts: Set<ClaudeRoutingConflict> = []
     ) -> Self {
         .init(
-            version: version, executableSHA256: hash, resolvedConfigurationPath: path,
+            storageContractVerified: storageContractVerified, resolvedConfigurationPath: path,
             defaultConfigurationPath: "/synthetic/home/.claude.json", environmentUser: environmentUser,
             operatingSystemUser: "os-fixture", conflicts: conflicts
         )
@@ -3702,8 +3861,7 @@ struct RoutingRejection: Sendable {
     let evidence: ClaudeRoutingEvidence
     let error: ClaudeRoutingError
     static let cases: [Self] = [
-        .init(evidence: .testing(version: "2.1.253"), error: .unsupportedBuild),
-        .init(evidence: .testing(hash: "synthetic-wrong-hash"), error: .unexpectedHash),
+        .init(evidence: .testing(storageContractVerified: false), error: .unsupportedBuild),
         .init(evidence: .testing(path: "/synthetic/alternate/.claude.json"), error: .nonDefaultResolver),
         .init(evidence: .testing(conflicts: [.configurationOverride]), error: .conflictingSource),
         .init(evidence: .testing(conflicts: [.secureStorageOverride]), error: .conflictingSource),

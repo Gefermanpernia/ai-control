@@ -69,11 +69,12 @@ private func savedLogin(_ account: String, usable: Bool = true) throws -> Claude
 private struct UnexpectedSwitchError: Error {}
 
 enum ClaudeSwitchFailure: CaseIterable {
-    case refused, unknownAlias, reLoginNeeded, recoveryRequired, cleanupUncertain, unavailable, unverified
+    case refused, claudeRunning, unknownAlias, reLoginNeeded, recoveryRequired, cleanupUncertain, unavailable, unverified
 
     var error: Error {
         switch self {
         case .refused: return ClaudeLoginSelectionError.changedRoots
+        case .claudeRunning: return ClaudeProcessPreflightError.active
         case .unknownAlias: return ClaudeLoginSelectionError.unknownAlias
         case .reLoginNeeded: return ClaudeLoginSelectionError.reLoginNeeded
         case .recoveryRequired: return ClaudeLoginEnvelopeError.recoveryRequired
@@ -87,6 +88,8 @@ enum ClaudeSwitchFailure: CaseIterable {
         switch self {
         case .refused:
             return .init(text: "Not switched. Claude or its files changed; close Claude and try again.", offersRecovery: false)
+        case .claudeRunning:
+            return .init(text: "Not switched. Quit every Claude Code session, then try again.", offersRecovery: false)
         case .unknownAlias:
             return .init(text: "beta is no longer a saved login.", offersRecovery: false)
         case .reLoginNeeded:

@@ -136,7 +136,7 @@ final class ControlStore: ObservableObject {
 
     init(refreshDelay: @escaping @Sendable () async -> Void = {
         try? await Task.sleep(nanoseconds: 700_000_000)
-    }, claudeLogins: ClaudeLoginAppAdapter = ClaudeLoginAppAdapter()) {
+    }, claudeLogins: ClaudeLoginAppAdapter = .configured()) {
         self.refreshDelay = refreshDelay
         claudeAdapter = claudeLogins
         configureAutomaticRefresh()
@@ -222,6 +222,9 @@ final class ControlStore: ObservableObject {
             return .init(text: "Recovery check finished. Choose a saved login to switch.", offersRecovery: false)
         case .refused:
             return .init(text: "Not switched. Claude or its files changed; close Claude and try again.", offersRecovery: false)
+        case .claudeRunning:
+            return .init(text: "\(alias == nil ? "Recovery not run" : "Not switched"). Quit every Claude Code session, then try again.",
+                         offersRecovery: false)
         case .unknownAlias: return .init(text: "\(name) is no longer a saved login.", offersRecovery: false)
         case .reLoginNeeded:
             return .init(text: "\(name) needs a new login. Sign in with Claude, then save it again.", offersRecovery: false)

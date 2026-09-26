@@ -435,6 +435,7 @@ enum ClaudeLoginAppResult: Equatable, Sendable {
     case verifiedApplied(String)
     case recoveryChecked
     case refused
+    case claudeRunning
     case unknownAlias
     case reLoginNeeded(String)
     case recoveryRequired
@@ -449,6 +450,14 @@ actor ClaudeLoginAppAdapter {
 
     init() { makeBackend = nil }
     init(makeBackend: @escaping () -> any ClaudeLoginBackend) { self.makeBackend = makeBackend }
+
+    /// Real switching only when `AI_CONTROL_CLAUDE_LIVE=1`; otherwise the app reports it as unavailable.
+    static func configured(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ClaudeLoginAppAdapter {
+        guard let makeBackend = ClaudeLiveSystem.configuredBackend(environment: environment) else { return .init() }
+        return .init(makeBackend: makeBackend)
+    }
 
     func list() -> ClaudeLoginAppResult {
         guard let backend = backend() else { return .backendUnavailable }
@@ -497,6 +506,7 @@ actor ClaudeLoginAppAdapter {
         case ClaudeLoginSelectionError.reLoginNeeded: return .reLoginNeeded(alias ?? "")
         case ClaudeLoginSelectionError.cleanupUncertain: return .postCommitCleanupUncertain
         case ClaudeLoginSelectionError.unavailable: return .backendUnavailable
+        case ClaudeProcessPreflightError.active: return .claudeRunning
         case ClaudeLoginSelectionError.ambiguousOutgoing, ClaudeLoginSelectionError.changedRoots: return .refused
         default: return .unverifiedFailure
         }
@@ -531,9 +541,10 @@ private enum ClaudeLoginCommand {
 
 @MainActor
 public func runClaudeLogins(arguments: [String]) -> Int32 {
-    runClaudeLogins(
+    let liveBackend = ClaudeLiveSystem.configuredBackend(environment: ProcessInfo.processInfo.environment)
+    return runClaudeLogins(
         arguments: arguments,
-        makeBackend: { UnavailableClaudeLoginBackend() },
+        makeBackend: liveBackend ?? { UnavailableClaudeLoginBackend() },
         output: { print($0) },
         runGUI: runAIControl
     )
@@ -586,6 +597,12 @@ func runClaudeLogins(
         return 5
     } catch ClaudeLoginSelectionError.cleanupUncertain {
         output("Blocked: selection applied but cleanup is uncertain.")
+        return 3
+    } catch ClaudeProcessPreflightError.active {
+        output("Blocked: Claude Code is running; quit every session and try again.")
+        return 3
+    } catch ClaudeRoutingError.unsupportedBuild {
+        output("Blocked: this Claude Code build stores logins differently from reviewed builds.")
         return 3
     } catch {
         output("Blocked: credential backend unavailable.")

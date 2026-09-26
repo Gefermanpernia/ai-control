@@ -588,13 +588,21 @@ enum ProtectedConfigurationError: Error, Equatable {
 struct ClaudeConfigurationPatch {
     var oauthAccount: JSONPresence?
     var invalidateAccountCaches: Bool
+    private var ownedChanges: [String: JSONPresence]?
 
     init(oauthAccount: JSONPresence? = nil, invalidateAccountCaches: Bool = false) {
         self.oauthAccount = oauthAccount
         self.invalidateAccountCaches = invalidateAccountCaches
     }
 
+    /// Writes exactly these owned keys, e.g. when recovery restores cache values.
+    init(changes: [String: JSONPresence]) {
+        self.init()
+        ownedChanges = changes
+    }
+
     fileprivate var changes: [String: JSONPresence] {
+        if let ownedChanges { return ownedChanges }
         var result: [String: JSONPresence] = [:]
         if let oauthAccount { result["oauthAccount"] = oauthAccount }
         if invalidateAccountCaches {
@@ -860,8 +868,8 @@ enum ClaudeRoutingConflict: Hashable, Sendable {
 }
 
 struct ClaudeRoutingEvidence: Sendable {
-    let version: String
-    let executableSHA256: String
+    /// True only when the installed build derives credential storage exactly as the reviewed builds do.
+    let storageContractVerified: Bool
     let resolvedConfigurationPath: String
     let defaultConfigurationPath: String
     let environmentUser: String?
@@ -877,20 +885,13 @@ struct ClaudeStorageRoute: Equatable, Sendable {
 
 enum ClaudeRoutingError: Error, Equatable {
     case unsupportedBuild
-    case unexpectedHash
     case nonDefaultResolver
     case conflictingSource
 }
 
 enum ClaudeRoutingValidator {
-    static let version = "2.1.252"
-    static let executableSHA256 = "b661c6a094fcc32656bf7c0071c5b45bf900b34d4f0a1ab3d78fd59aeba2c2c7"
-
     static func route(_ evidence: ClaudeRoutingEvidence) throws -> ClaudeStorageRoute {
-        guard evidence.version == version else { throw ClaudeRoutingError.unsupportedBuild }
-        guard evidence.executableSHA256.lowercased() == executableSHA256 else {
-            throw ClaudeRoutingError.unexpectedHash
-        }
+        guard evidence.storageContractVerified else { throw ClaudeRoutingError.unsupportedBuild }
         guard evidence.resolvedConfigurationPath == evidence.defaultConfigurationPath else {
             throw ClaudeRoutingError.nonDefaultResolver
         }
@@ -1030,6 +1031,8 @@ struct ClaudeProcessPreflight {
     let expectedUID: uid_t
     let trustedExecutablePath: String
     let probe: NativeProcessProbe
+    /// Any executable inside this directory is Claude too, e.g. older versions still running after an update.
+    var trustedExecutableDirectory: String? = nil
 
     func requireQuiescent() throws {
         let records: [ClaudeProcessRecord]
@@ -1052,7 +1055,7 @@ struct ClaudeProcessPreflight {
                 guard visited.insert(record.pid).inserted else {
                     throw ClaudeProcessPreflightError.uncertain
                 }
-                if !record.isZombie && (record.role != nil || record.executablePath == trustedExecutablePath) {
+                if !record.isZombie && (record.role != nil || isClaude(record.executablePath)) {
                     throw ClaudeProcessPreflightError.active
                 }
                 guard let parent = record.parentPID, let ancestor = byPID[parent],
@@ -1060,6 +1063,13 @@ struct ClaudeProcessPreflight {
                 current = ancestor
             }
         }
+    }
+
+    private func isClaude(_ path: String?) -> Bool {
+        guard let path else { return false }
+        if path == trustedExecutablePath { return true }
+        guard let directory = trustedExecutableDirectory else { return false }
+        return path.hasPrefix(directory + "/")
     }
 
     func performGuarded(write: () throws -> Void, verify: () throws -> Void) throws {
