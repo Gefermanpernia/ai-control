@@ -922,6 +922,8 @@ struct ClaudeProcessRecord: Equatable, Sendable {
     let executablePath: String?
     let role: ClaudeProcessRole?
     let isZombie: Bool
+    /// Command name of a live process whose executable file no longer exists, e.g. after an app update.
+    let deletedExecutableName: String?
 
     init(
         pid: pid_t,
@@ -929,8 +931,10 @@ struct ClaudeProcessRecord: Equatable, Sendable {
         uid: uid_t?,
         executablePath: String?,
         role: ClaudeProcessRole?,
-        isZombie: Bool = false
+        isZombie: Bool = false,
+        deletedExecutableName: String? = nil
     ) {
+        self.deletedExecutableName = deletedExecutableName
         self.pid = pid
         self.parentPID = parentPID
         self.uid = uid
@@ -969,13 +973,16 @@ struct NativeProcessProbe {
                     throw ClaudeProcessPreflightError.uncertain
                 }
                 let isZombie = info.pbsi_status == UInt32(SZOMB)
+                let path = isZombie ? nil : try executablePath(pid: pid, calls: calls)
+                let name = withUnsafeBytes(of: info.pbsi_comm) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
                 return .init(
                     pid: pid,
                     parentPID: pid_t(info.pbsi_ppid),
                     uid: info.pbsi_uid,
-                    executablePath: isZombie ? nil : try executablePath(pid: pid, calls: calls),
+                    executablePath: path,
                     role: nil,
-                    isZombie: isZombie
+                    isZombie: isZombie,
+                    deletedExecutableName: isZombie || path != nil ? nil : name
                 )
             }
         })
@@ -1008,9 +1015,11 @@ struct NativeProcessProbe {
         }
     }
 
-    private static func executablePath(pid: pid_t, calls: ProcessNativeCalls) throws -> String {
+    /// Returns nil only when the executable file was deleted while the process kept running.
+    private static func executablePath(pid: pid_t, calls: ProcessNativeCalls) throws -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         let copied = calls.processPath(pid, &buffer, UInt32(buffer.count))
+        if copied <= 0 && errno == ENOENT { return nil }
         guard copied > 0, copied < buffer.count else { throw ClaudeProcessPreflightError.uncertain }
         let end = min(Int(copied) + 1, buffer.count)
         guard let terminator = buffer[..<end].firstIndex(of: 0), terminator > 0,
@@ -1040,8 +1049,8 @@ struct ClaudeProcessPreflight {
         var byPID: [pid_t: ClaudeProcessRecord] = [:]
         for record in records {
             let validLifecycle = record.isZombie
-                ? record.executablePath == nil && record.role == nil
-                : record.executablePath?.isEmpty == false
+                ? record.executablePath == nil && record.role == nil && record.deletedExecutableName == nil
+                : record.executablePath?.isEmpty == false || record.deletedExecutableName?.isEmpty == false
             guard record.pid > 0, record.parentPID.map({ $0 >= 0 }) ?? true,
                   record.uid != nil, validLifecycle,
                   byPID.updateValue(record, forKey: record.pid) == nil else {
@@ -1055,7 +1064,7 @@ struct ClaudeProcessPreflight {
                 guard visited.insert(record.pid).inserted else {
                     throw ClaudeProcessPreflightError.uncertain
                 }
-                if !record.isZombie && (record.role != nil || isClaude(record.executablePath)) {
+                if !record.isZombie && (record.role != nil || isClaude(record)) {
                     throw ClaudeProcessPreflightError.active
                 }
                 guard let parent = record.parentPID, let ancestor = byPID[parent],
@@ -1065,9 +1074,14 @@ struct ClaudeProcessPreflight {
         }
     }
 
-    private func isClaude(_ path: String?) -> Bool {
-        guard let path else { return false }
-        if path == trustedExecutablePath { return true }
+    private func isClaude(_ record: ClaudeProcessRecord) -> Bool {
+        // Native-installer executables are named after their version, so a deleted one keeps that name.
+        if let name = record.deletedExecutableName {
+            return name == "claude" || name.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+"#, options: .regularExpression) != nil
+        }
+        guard let path = record.executablePath else { return false }
+        // Claude Code embedded elsewhere (e.g. the Agent SDK) shares the same login.
+        if path == trustedExecutablePath || URL(fileURLWithPath: path).lastPathComponent == "claude" { return true }
         guard let directory = trustedExecutableDirectory else { return false }
         return path.hasPrefix(directory + "/")
     }

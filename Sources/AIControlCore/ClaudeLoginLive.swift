@@ -93,9 +93,7 @@ struct ClaudeLiveSystem {
             probe: .system(), trustedExecutableDirectory: versionsDirectory
         )
         let custody = { (guardMutation: @escaping () throws -> Void) in
-            ClaudeLoginCustody(store: try IsolatedKeychainAdapter(
-                keychain: try Self.defaultKeychain(), approvedBinaryPath: managerExecutable, beforeMutation: guardMutation
-            ))
+            ClaudeLoginCustody(store: try Self.managerStore(beforeMutation: guardMutation))
         }
         return CommandScopedClaudeLoginBackend(
             acquireLock: { [managerDirectory] in try ManagerFileLock.acquire(directory: managerDirectory) },
@@ -111,8 +109,19 @@ struct ClaudeLiveSystem {
         )
     }
 
+    static func managerStore(beforeMutation: @escaping () throws -> Void) throws -> MigratingKeychainStore {
+        let account = String(geteuid())
+        let legacy = IsolatedKeychainAdapter(
+            keychain: try defaultKeychain(), service: "AIControl-claude-logins.v1", account: account
+        )
+        return .init(
+            primary: .init(service: "AIControl-claude-logins.v2", account: account, beforeMutation: beforeMutation),
+            legacyRead: legacy.read, legacyDelete: legacy.delete
+        )
+    }
+
     static func resources(_ route: ClaudeStorageRoute) throws -> ClaudeLoginResourceIO {
-        let item = IsolatedKeychainAdapter(keychain: try defaultKeychain(), service: route.service, account: route.account)
+        let item = SecurityToolKeychainItem(service: route.service, account: route.account)
         let file = ProtectedConfigurationFile(path: route.configurationPath)
         return .init(
             readRoots: {
@@ -143,5 +152,136 @@ struct ClaudeLiveSystem {
         let status = SecKeychainCopyDefault(&keychain)
         guard status == errSecSuccess, let keychain else { throw IsolatedKeychainError.operatingSystem(status) }
         return keychain
+    }
+}
+
+/// Reads and writes a generic-password item through `/usr/bin/security`, exactly as Claude Code does.
+///
+/// Using the same Apple tool leaves the item's access list and partitions untouched, so neither Claude Code
+/// nor AI Control triggers Keychain prompts after a switch. Payloads go on stdin; like Claude Code, payloads
+/// above the `security -i` line limit fall back to argv, which only same-user processes can read and which
+/// could already read this item through the same tool.
+struct SecurityToolKeychainItem: ClaudeLoginDataStore {
+    typealias Runner = (_ arguments: [String], _ input: Data?) throws -> (status: Int32, output: Data)
+    static let interactiveLimit = 4032
+
+    let service: String
+    let account: String
+    var beforeMutation: () throws -> Void = {}
+    var run: Runner = Self.runSecurity
+
+    func read() throws -> Data {
+        let result = try run(["find-generic-password", "-a", account, "-s", service, "-w"], nil)
+        try Self.check(result.status)
+        return try Self.decodePassword(result.output)
+    }
+
+    func create(data: Data) throws { try create(data: data, guardedBy: beforeMutation) }
+    func update(data: Data) throws { try update(data: data, guardedBy: beforeMutation) }
+
+    func create(data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        try guardMutation()
+        try write(data, updating: false)
+    }
+
+    func update(data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        _ = try read()
+        try guardMutation()
+        try write(data, updating: true)
+    }
+
+    func replace(expectedData: Data, with data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        guard try read() == expectedData else { throw IsolatedKeychainError.corrupt }
+        try guardMutation()
+        try write(data, updating: true)
+    }
+
+    private func write(_ data: Data, updating: Bool) throws {
+        let safe = #"^[A-Za-z0-9._ -]+$"#
+        guard service.range(of: safe, options: .regularExpression) != nil,
+              account.range(of: safe, options: .regularExpression) != nil else { throw IsolatedKeychainError.corrupt }
+        let hex = data.map { String(format: "%02x", $0) }.joined()
+        let update = updating ? ["-U"] : []
+        let command = "add-generic-password \(updating ? "-U " : "")-a \"\(account)\" -s \"\(service)\" -X \"\(hex)\"\n"
+        let result = command.utf8.count <= Self.interactiveLimit
+            ? try run(["-i"], Data(command.utf8))
+            : try run(["add-generic-password"] + update + ["-a", account, "-s", service, "-X", hex], nil)
+        try Self.check(result.status)
+    }
+
+    private static func decodePassword(_ output: Data) throws -> Data {
+        var text = String(decoding: output, as: UTF8.self)
+        if text.hasSuffix("\n") { text.removeLast() }
+        if text.hasPrefix("{") { return Data(text.utf8) }
+        // `security -w` prints non-ASCII passwords as hex.
+        guard text.count.isMultiple(of: 2), !text.isEmpty,
+              text.allSatisfy(\.isHexDigit) else { throw IsolatedKeychainError.corrupt }
+        var bytes = [UInt8]()
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(index, offsetBy: 2)
+            guard let byte = UInt8(text[index..<next], radix: 16) else { throw IsolatedKeychainError.corrupt }
+            bytes.append(byte)
+            index = next
+        }
+        return Data(bytes)
+    }
+
+    private static func check(_ status: Int32) throws {
+        switch status {
+        case 0: return
+        case 44: throw IsolatedKeychainError.missing
+        case 45: throw IsolatedKeychainError.duplicate
+        case 36: throw IsolatedKeychainError.locked
+        case 51: throw IsolatedKeychainError.denied
+        case 128: throw IsolatedKeychainError.cancelled
+        default: throw IsolatedKeychainError.operatingSystem(OSStatus(status))
+        }
+    }
+
+    static func runSecurity(_ arguments: [String], _ input: Data?) throws -> (status: Int32, output: Data) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = arguments
+        let standardInput = Pipe()
+        let standardOutput = Pipe()
+        process.standardInput = standardInput
+        process.standardOutput = standardOutput
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        if let input { standardInput.fileHandleForWriting.write(input) }
+        try standardInput.fileHandleForWriting.close()
+        let output = standardOutput.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, output)
+    }
+}
+
+/// Manager state in a `security`-owned item, migrating the earlier AI Control-owned item on first write.
+struct MigratingKeychainStore: ClaudeLoginDataStore {
+    let primary: SecurityToolKeychainItem
+    let legacyRead: () throws -> Data
+    let legacyDelete: () throws -> Void
+
+    func read() throws -> Data {
+        do { return try primary.read() } catch IsolatedKeychainError.missing { return try legacyRead() }
+    }
+
+    func create(data: Data) throws { try primary.create(data: data) }
+    func update(data: Data) throws { try update(data: data, guardedBy: primary.beforeMutation) }
+    func create(data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        try primary.create(data: data, guardedBy: guardMutation)
+    }
+
+    func update(data: Data, guardedBy guardMutation: () throws -> Void) throws {
+        do {
+            _ = try primary.read()
+        } catch IsolatedKeychainError.missing {
+            _ = try legacyRead()
+            try primary.create(data: data, guardedBy: guardMutation)
+            try? legacyDelete()
+            return
+        }
+        try primary.update(data: data, guardedBy: guardMutation)
     }
 }

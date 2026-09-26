@@ -606,6 +606,8 @@ func runClaudeLogins(
         return 3
     } catch {
         output("Blocked: credential backend unavailable.")
+        // Error types carry only status codes and cases, never credential content.
+        if ProcessInfo.processInfo.environment["AI_CONTROL_DEBUG"] == "1" { output("Debug: \(String(reflecting: error))") }
         return 3
     }
 }

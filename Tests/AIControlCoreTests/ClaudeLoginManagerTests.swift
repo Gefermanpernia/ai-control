@@ -2565,6 +2565,22 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.pathCalls == 1)
     }
 
+    @Test("A process whose executable was deleted is identified by its command name")
+    func deletedExecutableIsIdentifiedByName() throws {
+        func preflight(_ name: String) -> ClaudeProcessPreflight {
+            .init(expectedUID: 501, trustedExecutablePath: "/synthetic/claude", probe: .system(
+                processIDs: { [42] }, calls: ProcessNativeFixture(deletedExecutableName: name).calls
+            ))
+        }
+        let record = try #require(preflight("chrome_crashpad").probe.snapshot().first)
+        #expect(record.executablePath == nil)
+        #expect(record.deletedExecutableName == "chrome_crashpad")
+        try preflight("chrome_crashpad").requireQuiescent()
+        #expect(throws: ClaudeProcessPreflightError.active) { try preflight("2.1.274").requireQuiescent() }
+        #expect(throws: ClaudeProcessPreflightError.active) { try preflight("claude").requireQuiescent() }
+        #expect(throws: ClaudeProcessPreflightError.uncertain) { try preflight("").requireQuiescent() }
+    }
+
     @Test("Zombie ancestry still reaches a recognized same-user live ancestor")
     func processPreflightPreservesZombieAncestry() {
         let records = [
@@ -2835,6 +2851,82 @@ struct ClaudeLoginManagerTests {
             "Blocked: Claude Code is running; quit every session and try again.",
             "Blocked: this Claude Code build stores logins differently from reviewed builds."
         ])
+    }
+
+    @Test("Security tool item reads text or hex passwords and maps missing items")
+    func securityToolItemReads() throws {
+        let tool = FakeSecurityTool(responses: [(0, Data("{\"a\":1}\n".utf8)), (0, Data("7b2262223a327d\n".utf8)), (44, Data())])
+        let item = SecurityToolKeychainItem(service: "Claude Code-credentials", account: "me", run: tool.run)
+        #expect(try item.read() == Data(#"{"a":1}"#.utf8))
+        #expect(try item.read() == Data(#"{"b":2}"#.utf8))
+        #expect(throws: IsolatedKeychainError.missing) { try item.read() }
+        #expect(tool.calls.first?.arguments == ["find-generic-password", "-a", "me", "-s", "Claude Code-credentials", "-w"])
+        #expect(tool.calls.allSatisfy { $0.input == nil })
+    }
+
+    @Test("Security tool item sends small payloads on stdin and large ones like Claude Code")
+    func securityToolItemWritesLikeClaude() throws {
+        let tool = FakeSecurityTool(responses: [(0, Data()), (0, Data())])
+        let item = SecurityToolKeychainItem(service: "Claude Code-credentials", account: "me", run: tool.run)
+        try item.create(data: Data("{}".utf8), guardedBy: {})
+        let large = Data(repeating: 0x61, count: 3000)
+        try item.create(data: large, guardedBy: {})
+
+        #expect(tool.calls[0].arguments == ["-i"])
+        #expect(tool.calls[0].input == Data(#"add-generic-password -a "me" -s "Claude Code-credentials" -X "7b7d""#.utf8 + [0x0A]))
+        #expect(tool.calls[1].arguments.prefix(5) == ["add-generic-password", "-a", "me", "-s", "Claude Code-credentials"])
+        #expect(tool.calls[1].arguments.last == String(repeating: "61", count: 3000))
+        #expect(tool.calls[1].input == nil)
+        #expect(throws: IsolatedKeychainError.corrupt) {
+            try SecurityToolKeychainItem(service: "x", account: #"a" -s "b"#, run: tool.run).create(data: Data(), guardedBy: {})
+        }
+    }
+
+    @Test("Security tool replace compares before its guard and writes only after it")
+    func securityToolItemReplaceOrdersGuard() throws {
+        var events: [String] = []
+        let tool = FakeSecurityTool(responses: [(0, Data("{\"a\":1}".utf8)), (0, Data()), (0, Data("{\"a\":2}".utf8))])
+        tool.onCall = { events.append($0.arguments.first ?? "") }
+        let item = SecurityToolKeychainItem(service: "Claude Code-credentials", account: "me", run: tool.run)
+
+        try item.replace(expectedData: Data(#"{"a":1}"#.utf8), with: Data(#"{"b":1}"#.utf8)) { events.append("guard") }
+        #expect(events == ["find-generic-password", "guard", "-i"])
+        #expect(tool.calls[1].input.map { String(decoding: $0, as: UTF8.self) }?.hasPrefix("add-generic-password -U ") == true)
+        #expect(throws: IsolatedKeychainError.corrupt) {
+            try item.replace(expectedData: Data(#"{"a":1}"#.utf8), with: Data()) { events.append("late guard") }
+        }
+        #expect(!events.contains("late guard"))
+    }
+
+    @Test("Manager store reads a legacy item without writing and migrates it on the first update")
+    func managerStoreMigratesLegacyItem() throws {
+        let tool = FakeSecurityTool(responses: [(44, Data()), (44, Data()), (0, Data())])
+        var legacyDeleted = false
+        let store = MigratingKeychainStore(
+            primary: .init(service: "AIControl-claude-logins.v2", account: "501", run: tool.run),
+            legacyRead: { Data("{\"v\":1}".utf8) }, legacyDelete: { legacyDeleted = true }
+        )
+        #expect(try store.read() == Data(#"{"v":1}"#.utf8))
+        #expect(tool.calls.count == 1 && !legacyDeleted)
+
+        var guards = 0
+        try store.update(data: Data(#"{"v":2}"#.utf8)) { guards += 1 }
+        #expect(guards == 1 && legacyDeleted)
+        #expect(tool.calls.last?.input.map { String(decoding: $0, as: UTF8.self) }?.hasPrefix("add-generic-password -a ") == true)
+    }
+
+    @Test("Process preflight treats any executable named claude as a running Claude session")
+    func preflightDetectsEmbeddedClaude() throws {
+        func preflight(_ path: String) -> ClaudeProcessPreflight {
+            .init(expectedUID: 501, trustedExecutablePath: "/v/2.1.282", probe: .init(snapshot: {
+                [.init(pid: 9, parentPID: 1, uid: 501, executablePath: path, role: nil)]
+            }), trustedExecutableDirectory: "/v")
+        }
+        #expect(throws: ClaudeProcessPreflightError.active) {
+            try preflight("/home/me/.pi/agent/npm/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude").requireQuiescent()
+        }
+        try preflight("/Applications/Claude.app/Contents/MacOS/Claude").requireQuiescent()
+        try preflight("/usr/local/bin/claudette").requireQuiescent()
     }
 
     @Test("Live switching stays off unless explicitly enabled")
@@ -3773,6 +3865,24 @@ enum ConfigurationPresence: CaseIterable {
     }
 }
 
+private final class FakeSecurityTool {
+    struct Call { let arguments: [String]; let input: Data? }
+    private var responses: [(Int32, Data)]
+    private(set) var calls: [Call] = []
+    var onCall: ((Call) -> Void)?
+
+    init(responses: [(Int32, Data)]) { self.responses = responses }
+
+    func run(_ arguments: [String], _ input: Data?) throws -> (status: Int32, output: Data) {
+        let call = Call(arguments: arguments, input: input)
+        calls.append(call)
+        onCall?(call)
+        guard !responses.isEmpty else { throw FixtureError() }
+        let (status, output) = responses.removeFirst()
+        return (status, output)
+    }
+}
+
 private final class LiveSystemFixture {
     private(set) var checkedExecutables: [String] = []
     private let environment: [String: String]
@@ -3926,6 +4036,7 @@ private final class ProcessNativeFixture: @unchecked Sendable {
     private let status: UInt32
     private let flags: UInt32
     private let uid: uid_t
+    private let deletedExecutableName: String?
 
     init(
         inventoryFailure: InventoryFailure? = nil,
@@ -3933,8 +4044,10 @@ private final class ProcessNativeFixture: @unchecked Sendable {
         pathFailure: PathFailure? = nil,
         status: UInt32 = UInt32(SRUN),
         flags: UInt32 = 0,
-        uid: uid_t = 501
+        uid: uid_t = 501,
+        deletedExecutableName: String? = nil
     ) {
+        self.deletedExecutableName = deletedExecutableName
         self.inventoryFailure = inventoryFailure
         self.metadataFailure = metadataFailure
         self.pathFailure = pathFailure
@@ -3984,6 +4097,9 @@ private final class ProcessNativeFixture: @unchecked Sendable {
                     info.pbsi_uid = uid
                     info.pbsi_status = status
                     info.pbsi_flags = flags
+                    if let deletedExecutableName {
+                        withUnsafeMutableBytes(of: &info.pbsi_comm) { $0.copyBytes(from: Array(deletedExecutableName.utf8)) }
+                    }
                     buffer?.copyMemory(from: &info, byteCount: min(Int(size), MemoryLayout.size(ofValue: info)))
                 } else {
                     var info = proc_bsdinfo()
@@ -4000,7 +4116,8 @@ private final class ProcessNativeFixture: @unchecked Sendable {
             },
             processPath: { [self] _, buffer, capacity in
                 pathCalls += 1
-                if pathFailure == .zero { return 0 }
+                if deletedExecutableName != nil { errno = ENOENT; return 0 }
+                if pathFailure == .zero { errno = EPERM; return 0 }
                 let bytes: [UInt8]
                 switch pathFailure {
                 case .empty: bytes = [0]
