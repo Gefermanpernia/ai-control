@@ -520,12 +520,14 @@ private enum ClaudeLoginCommand {
     case list
     case use(String)
     case rename(String, String)
+    case checkpoint
     case recover
 
     init?(arguments: [String]) {
         switch arguments {
         case ["claude-login", "list"]: self = .list
         case ["claude-login", "recover"]: self = .recover
+        case ["claude-login", "checkpoint"]: self = .checkpoint
         case let arguments where arguments.count == 4 && arguments[0] == "claude-login" && arguments[1] == "rename":
             guard Self.valid(arguments[2]), Self.valid(arguments[3]) else { return nil }
             self = .rename(arguments[2], arguments[3])
@@ -580,6 +582,22 @@ func runClaudeLogins(
             return try backend.perform(command: .list) { try list(backend: $0, output: output) }
         case .use(let alias):
             return try backend.perform(command: .use) { try use(alias: alias, backend: $0, output: output) }
+        case .checkpoint:
+            // Before a native login replaces it, keep the latest refresh of the live login under its alias.
+            return try backend.perform(command: .save) {
+                let current = try $0.currentSnapshot()
+                var state = try $0.loadState()
+                guard let alias = state.snapshots.first(where: { $0.value.identity == current.identity })?.key else {
+                    output("The current Claude login is not saved; nothing to re-save.")
+                    return 0
+                }
+                if current.usability == .usable && state.snapshots[alias] != current {
+                    state.snapshots[alias] = current
+                    try $0.saveState(state)
+                }
+                output("Re-saved \(alias).")
+                return 0
+            }
         case .rename(let alias, let newAlias):
             return try backend.perform(command: .save) {
                 var state = try $0.loadState()

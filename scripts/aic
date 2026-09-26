@@ -3,6 +3,7 @@
 #   aic               open the menu-bar app
 #   aic save <name>   save the login Claude is using now
 #   aic use <name>    switch Claude to a saved login
+#   aic login <name> [email]  sign in to another Claude account and save it
 #   aic list | rename <name> <new-name> | recover
 #   aic codex save|use|list|rename ...   the same for Codex
 #   aic codex login <name>               sign in to another Codex account safely and save it
@@ -14,6 +15,12 @@ if [ $# -eq 0 ]; then
     nohup "$binary" >/dev/null 2>&1 &
     echo "AI Control is running in the menu bar."
     exit 0
+fi
+if [ "$1" = "login" ] && { [ $# -eq 2 ] || [ $# -eq 3 ]; }; then
+    # claude auth login keeps the previous login valid; re-save it first so its latest refresh is kept.
+    "$binary" claude-login checkpoint
+    if [ $# -eq 3 ]; then claude auth login --claudeai --email "$3"; else claude auth login --claudeai; fi
+    exec "$binary" claude-login save "$2"
 fi
 if [ "$1" = "codex" ]; then
     shift

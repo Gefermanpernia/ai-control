@@ -218,6 +218,28 @@ struct ClaudeLoginManagerTests {
         ])
     }
 
+    @Test("Checkpoint re-saves the live login under its own alias and never saves an unknown one")
+    func checkpointReSavesLiveLogin() throws {
+        let saved = try snapshot(account: "account-b", accessToken: "B1")
+        let renewed = try snapshot(account: "account-b", accessToken: "B2")
+        let backend = RecordingClaudeLoginBackend(
+            state: .init(snapshots: ["alpha": try snapshot(account: "account-a"), "beta": saved], activeAlias: "alpha"),
+            current: renewed
+        )
+        var messages: [String] = []
+        func run() -> Int32 {
+            runClaudeLogins(arguments: ["claude-login", "checkpoint"], makeBackend: { backend }, output: { messages.append($0) }, runGUI: {})
+        }
+
+        #expect(run() == 0)
+        #expect(backend.state.snapshots["beta"] == renewed)
+        #expect(backend.state.activeAlias == "alpha")
+        backend.current = try snapshot(account: "account-c")
+        #expect(run() == 0)
+        #expect(backend.savedStates.count == 1)
+        #expect(messages == ["Re-saved beta.", "The current Claude login is not saved; nothing to re-save."])
+    }
+
     @Test("Manual second login enrollment ignores a stale active marker")
     func enrollsDistinctSecondLoginWithoutOverwritingFirst() throws {
         let first = try snapshot(account: "account-a", accessToken: "A")
