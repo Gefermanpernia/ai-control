@@ -224,7 +224,7 @@ struct ControlStoreTests {
         #expect(store.canSelectCodexLogin(.init(name: "work", email: "a@example.com")))
     }
 
-    @Test("A Codex switch is serialized, swaps auth.json, and asks to restart open sessions")
+    @Test("A Codex switch is serialized, swaps auth.json, and reports the switch")
     func codexSwitchIsSerialized() async throws {
         let codex = try CodexStoreFixture()
         defer { codex.cleanup() }
@@ -238,7 +238,7 @@ struct ControlStoreTests {
         await task.value
 
         #expect(store.codexActivity == .idle)
-        #expect(store.codexNotice?.text == "Switched Codex to work. Restart open Codex sessions to use it.")
+        #expect(store.codexNotice?.text == "Switched Codex to work.")
         if case .loaded(let listing) = store.codexLogins { #expect(listing.inUse == "work") }
         else { Issue.record("Codex logins were not reloaded") }
         #expect(codex.live == codex.work)

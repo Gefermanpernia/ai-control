@@ -221,7 +221,7 @@ func runCodexLogins(arguments: [String], system: CodexLoginSystem = .current, ou
             output("Saved Codex login \(command[1]) (\(identity.email ?? "unknown email")).")
         case "use" where command.count == 2 && valid(command[1]):
             try manager.use(command[1])
-            output("Switched Codex to \(command[1]). Restart open Codex sessions to use it.")
+            output("Switched Codex to \(command[1]).")
         case "prepare-login" where command.count == 1:
             if let alias = try manager.prepareLogin() {
                 output("Saved \(alias); auth.json cleared for codex login.")

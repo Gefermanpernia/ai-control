@@ -55,8 +55,8 @@ struct CodexLoginTests {
         #expect(fixture.run("use", "home") == 0)
         #expect(fixture.live == b2)
         #expect(fixture.messages.suffix(2) == [
-            "Switched Codex to work. Restart open Codex sessions to use it.",
-            "Switched Codex to home. Restart open Codex sessions to use it."
+            "Switched Codex to work.",
+            "Switched Codex to home."
         ])
     }
 

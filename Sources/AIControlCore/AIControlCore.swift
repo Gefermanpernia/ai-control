@@ -171,7 +171,7 @@ final class ControlStore: ObservableObject {
         return Task { @MainActor [codexAdapter] in
             switch await codexAdapter.use(alias: alias) {
             case .switched(let name):
-                codexNotice = .init(text: "Switched Codex to \(name). Restart open Codex sessions to use it.", offersRecovery: false)
+                codexNotice = .init(text: "Switched Codex to \(name).", offersRecovery: false)
             case .blocked(let message):
                 codexNotice = .init(text: message, offersRecovery: false)
             case .unavailable:
@@ -436,7 +436,7 @@ struct ControlView: View {
     }
 
     private var footer: some View {
-        Text("Claude sessions follow a switch · Restart open Codex sessions")
+        Text("Open sessions keep working after a switch")
             .font(.caption2).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 12)

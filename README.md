@@ -18,7 +18,7 @@ Control never sends them anywhere.
 |---|---|---|
 | Switch accounts | Menu bar or `aic use <name>` | Menu bar or `aic codex use <name>` |
 | Add an account without opening the CLI | `aic login <name> [email]` | `aic codex login <name>` |
-| Open sessions after a switch | Pick up the new login on their next request | Keep the old login; restart them |
+| Open sessions after a switch | Keep working; no restart needed | Keep working; no restart needed |
 | Saved accounts | Up to 10 | Up to 10 |
 
 ## Requirements
