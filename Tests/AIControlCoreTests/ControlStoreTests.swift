@@ -413,20 +413,18 @@ struct ControlStoreTests {
 
     // MARK: - Menu warning
 
-    @Test("Menu warning shows when limit warnings are on and a warning account exists")
-    func menuWarningShowsWhenLimitWarningsEnabled() {
-        let store = makeStore()
-        #expect(store.limitWarnings)
+    @Test("The menu-bar warning appears only when Claude needs recovery, never for mock Codex data")
+    func menuWarningTracksClaudeRecovery() async throws {
+        let store = makeStore(claudeBackend: try SavedLoginBackend(
+            betaUsable: true, selectionError: ClaudeLoginEnvelopeError.recoveryRequired
+        ))
+        try await #require(store.reloadClaudeLogins()).value
+        #expect(store.showsMenuWarning == false)
 
+        try await #require(store.selectClaudeLogin("beta")).value
         #expect(store.showsMenuWarning)
-    }
 
-    @Test("Menu warning is hidden when limit warnings are off")
-    func menuWarningHiddenWhenLimitWarningsDisabled() {
-        let store = makeStore()
-
-        store.limitWarnings = false
-
+        try await #require(store.recoverClaudeLogins()).value
         #expect(store.showsMenuWarning == false)
     }
 }

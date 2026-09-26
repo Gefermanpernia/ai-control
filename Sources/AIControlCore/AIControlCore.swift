@@ -129,7 +129,6 @@ final class ControlStore: ObservableObject {
     @Published var automaticRefresh = true {
         didSet { configureAutomaticRefresh() }
     }
-    @Published var limitWarnings = true
     private let refreshDelay: @Sendable () async -> Void
     private var automaticRefreshTask: Task<Void, Never>?
     private let claudeAdapter: ClaudeLoginAppAdapter
@@ -142,12 +141,8 @@ final class ControlStore: ObservableObject {
         configureAutomaticRefresh()
     }
 
-    var showsMenuWarning: Bool {
-        limitWarnings && accountData.values.joined().contains {
-            if case .warning = $0.status { return true }
-            return false
-        }
-    }
+    /// Only real Claude trouble warrants the menu-bar alert; mock Codex usage never does.
+    var showsMenuWarning: Bool { claudeNotice?.offersRecovery == true }
     func accounts(for provider: CLIProvider) -> [Account] { accountData[provider] ?? [] }
     func isActive(_ account: Account, for provider: CLIProvider) -> Bool {
         activeAccountIDs[provider] == account.id
@@ -510,12 +505,6 @@ struct ControlView: View {
                 Divider()
                 Toggle(isOn: $store.automaticRefresh) {
                     settingCopy("Refresh automatically", help: "Check Codex mock usage every 5 minutes.")
-                }
-                .toggleStyle(.switch)
-                .padding(12)
-                Divider()
-                Toggle(isOn: $store.limitWarnings) {
-                    settingCopy("Limit warnings", help: "Show a menu-bar alert below 15%.")
                 }
                 .toggleStyle(.switch)
                 .padding(12)
