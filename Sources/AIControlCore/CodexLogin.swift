@@ -9,6 +9,23 @@ struct CodexLoginIdentity: Equatable, Sendable {
 enum CodexLoginError: Error, Equatable {
     case unsupportedAuth, noLiveLogin, unknownAlias, unsavedLiveLogin, alreadySaved(String), aliasTaken
     case tooMany, keyringStorage, changedDuringSwitch, readbackMismatch, writeFailed
+
+    /// `name` is the alias the command targeted; `liveEmail` names the account in auth.json.
+    func message(name: String, liveEmail: String?) -> String {
+        switch self {
+        case .unsupportedAuth: return "Blocked: only ChatGPT sign-in Codex logins can be saved or switched."
+        case .noLiveLogin: return "Blocked: Codex is not signed in; run codex login first."
+        case .unknownAlias: return "Blocked: no Codex login is saved as \(name)."
+        case .unsavedLiveLogin:
+            return "Blocked: the current Codex login (\(liveEmail ?? "unknown email")) is not saved; save it first."
+        case .alreadySaved(let alias): return "Blocked: this Codex login is already saved as \(alias)."
+        case .aliasTaken: return "Blocked: \(name) belongs to another Codex account."
+        case .tooMany: return "Blocked: \(ClaudeLoginEnvelopeCodec.maxAliases) Codex logins are already saved."
+        case .keyringStorage: return "Blocked: Codex keeps its login in the Keychain; only auth.json logins can be switched."
+        case .changedDuringSwitch: return "Blocked: Codex changed its login during the switch; try again."
+        case .readbackMismatch, .writeFailed: return "Blocked: the Codex login could not be written; check ~/.codex/auth.json."
+        }
+    }
 }
 
 /// Codex CLI's `auth.json` for ChatGPT sign-in. The account is identified offline from the file itself,
@@ -195,23 +212,63 @@ func runCodexLogins(arguments: [String], system: CodexLoginSystem = .current, ou
         }
         return 0
     } catch let error as CodexLoginError {
-        switch error {
-        case .unsupportedAuth: output("Blocked: only ChatGPT sign-in Codex logins can be saved or switched.")
-        case .noLiveLogin: output("Blocked: Codex is not signed in; run codex login first.")
-        case .unknownAlias: output("Blocked: no Codex login is saved as \(command.count > 1 ? command[1] : "that name").")
-        case .unsavedLiveLogin:
-            output("Blocked: the current Codex login (\(manager.liveIdentity()?.email ?? "unknown email")) is not saved; save it first.")
-        case .alreadySaved(let alias): output("Blocked: this Codex login is already saved as \(alias).")
-        case .aliasTaken: output("Blocked: \(command.last ?? "that name") belongs to another Codex account.")
-        case .tooMany: output("Blocked: \(ClaudeLoginEnvelopeCodec.maxAliases) Codex logins are already saved.")
-        case .keyringStorage: output("Blocked: Codex keeps its login in the Keychain; only auth.json logins can be switched.")
-        case .changedDuringSwitch: output("Blocked: Codex changed its login during the switch; try again.")
-        case .readbackMismatch, .writeFailed: output("Blocked: the Codex login could not be written; check ~/.codex/auth.json.")
-        }
+        let name = error == .aliasTaken ? command.last : (command.count > 1 ? command[1] : nil)
+        output(error.message(name: name ?? "that name", liveEmail: manager.liveIdentity()?.email))
         return 3
     } catch {
         output("Blocked: saved Codex logins are unavailable.")
         if ProcessInfo.processInfo.environment["AI_CONTROL_DEBUG"] == "1" { output("Debug: \(String(reflecting: error))") }
         return 3
     }
+}
+
+struct CodexLoginListing: Equatable, Sendable {
+    struct Login: Equatable, Sendable {
+        let name: String
+        let email: String?
+    }
+
+    let logins: [Login]
+    let inUse: String?
+}
+
+enum CodexLoginAppResult: Equatable, Sendable {
+    case listed(CodexLoginListing)
+    case switched(String)
+    case blocked(String)
+    case unavailable
+}
+
+/// Serializes Codex login commands off the main actor; unavailable unless live switching is enabled.
+actor CodexLoginAppAdapter {
+    private let makeSystem: (() -> CodexLoginSystem)?
+
+    init() { makeSystem = nil }
+    init(makeSystem: @escaping () -> CodexLoginSystem) { self.makeSystem = makeSystem }
+
+    static func configured(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> CodexLoginAppAdapter {
+        ClaudeLiveSystem.isEnabled(environment: environment) ? .init(makeSystem: { .current }) : .init()
+    }
+
+    func list() -> CodexLoginAppResult {
+        guard let manager else { return .unavailable }
+        guard let listing = try? manager.list() else { return .blocked("Saved Codex logins could not be read.") }
+        return .listed(.init(logins: listing.logins.map { .init(name: $0.alias, email: $0.email) }, inUse: listing.live))
+    }
+
+    func use(alias: String) -> CodexLoginAppResult {
+        guard let manager else { return .unavailable }
+        do {
+            try manager.use(alias)
+            return .switched(alias)
+        } catch let error as CodexLoginError {
+            return .blocked(error.message(name: alias, liveEmail: manager.liveIdentity()?.email))
+        } catch {
+            return .blocked("Blocked: saved Codex logins are unavailable.")
+        }
+    }
+
+    private var manager: CodexLoginManager? { makeSystem.map { CodexLoginManager(system: $0()) } }
 }

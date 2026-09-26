@@ -2749,8 +2749,7 @@ struct ClaudeLoginManagerTests {
         let fixture = try SelectionFixture()
         defer { fixture.cleanup() }
         let backend = fixture.backend
-        let store = ControlStore(refreshDelay: {}, claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }))
-        store.automaticRefresh = false
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }))
 
         try await #require(store.reloadClaudeLogins()).value
         #expect(store.claudeLogins == .loaded(.init(aliases: [

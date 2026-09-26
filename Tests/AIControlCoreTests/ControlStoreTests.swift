@@ -1,34 +1,6 @@
+import Foundation
 import Testing
 @testable import AIControlCore
-
-private actor ControlledRefreshDelay {
-    private var delayContinuation: CheckedContinuation<Void, Never>?
-    private var startContinuations: [CheckedContinuation<Void, Never>] = []
-    private(set) var callCount = 0
-
-    func wait() async {
-        callCount += 1
-        let continuations = startContinuations
-        startContinuations.removeAll()
-        continuations.forEach { $0.resume() }
-
-        await withCheckedContinuation { continuation in
-            delayContinuation = continuation
-        }
-    }
-
-    func waitUntilStarted(callCount expectedCallCount: Int = 1) async {
-        guard callCount < expectedCallCount else { return }
-        await withCheckedContinuation { continuation in
-            startContinuations.append(continuation)
-        }
-    }
-
-    func complete() {
-        delayContinuation?.resume()
-        delayContinuation = nil
-    }
-}
 
 private final class SavedLoginBackend: ClaudeLoginBackend {
     private var state: ClaudeLoginState
@@ -111,114 +83,12 @@ struct ControlStoreTests {
 
     // MARK: - Helpers
 
-    /// Builds a store with the background refresh timer switched off through the
-    /// store's own API, so assertions depend only on state transitions and never
-    /// on wall-clock timing.
     private func makeStore(
-        refreshDelay: @escaping @Sendable () async -> Void = {},
-        claudeBackend: (any ClaudeLoginBackend)? = nil
+        claudeBackend: (any ClaudeLoginBackend)? = nil, codex: CodexStoreFixture? = nil
     ) -> ControlStore {
-        let adapter = claudeBackend.map { backend in ClaudeLoginAppAdapter(makeBackend: { backend }) }
-        let store = ControlStore(refreshDelay: refreshDelay, claudeLogins: adapter ?? ClaudeLoginAppAdapter())
-        store.automaticRefresh = false
-        return store
-    }
-
-    private func account(
-        _ id: String,
-        for provider: CLIProvider,
-        in store: ControlStore
-    ) throws -> Account {
-        try #require(store.accounts(for: provider).first { $0.id == id })
-    }
-
-    // MARK: - Selecting a Codex mock account
-
-    @Test("Selecting another selectable Codex account makes it the active account")
-    func selectingAnotherSelectableAccountMakesItActive() throws {
-        let store = makeStore()
-        let target = try account("codex-consulting", for: .codex, in: store)
-        #expect(target.status.isSelectable)
-        #expect(store.activeAccountIDs[.codex] == "codex-personal")
-
-        store.select(target, for: .codex)
-
-        #expect(store.activeAccountIDs[.codex] == "codex-consulting")
-        #expect(store.isActive(target, for: .codex))
-        #expect(store.lastSwitch?.provider == .codex)
-        #expect(store.lastSwitch?.previousID == "codex-personal")
-        #expect(store.switchMessage?.contains(target.name) == true)
-    }
-
-    @Test("Selecting an unavailable Codex account leaves the active account unchanged")
-    func selectingUnavailableAccountIsANoOp() throws {
-        let store = makeStore()
-        let unavailable = try account("codex-playground", for: .codex, in: store)
-        #expect(unavailable.status.isSelectable == false)
-
-        store.select(unavailable, for: .codex)
-
-        #expect(store.activeAccountIDs[.codex] == "codex-personal")
-        #expect(store.isActive(unavailable, for: .codex) == false)
-        #expect(store.lastSwitch == nil)
-        #expect(store.switchMessage == nil)
-    }
-
-    @Test("Selecting the already active Codex account records no undoable switch")
-    func selectingActiveAccountRecordsNoUndoableSwitch() throws {
-        let store = makeStore()
-        let active = try account("codex-personal", for: .codex, in: store)
-        #expect(store.isActive(active, for: .codex))
-
-        store.select(active, for: .codex)
-
-        #expect(store.activeAccountIDs[.codex] == "codex-personal")
-        #expect(store.lastSwitch == nil)
-        #expect(store.switchMessage == nil)
-    }
-
-    @Test("Claude has no mock accounts, so a Codex account cannot be selected for Claude")
-    func selectingCrossProviderAccountIsANoOp() throws {
-        let store = makeStore()
-        let codexAccount = try account("codex-consulting", for: .codex, in: store)
-        #expect(store.accounts(for: .claude).isEmpty)
-
-        store.select(codexAccount, for: .claude)
-
-        #expect(store.activeAccountIDs[.claude] == nil)
-        #expect(store.activeAccountIDs[.codex] == "codex-personal")
-        #expect(store.lastSwitch == nil)
-        #expect(store.switchMessage == nil)
-    }
-
-    // MARK: - Undo
-
-    @Test("Undo restores the previously active Codex account after a switch")
-    func undoRestoresPreviouslyActiveAccount() throws {
-        let store = makeStore()
-        let previous = try account("codex-personal", for: .codex, in: store)
-        let target = try account("codex-consulting", for: .codex, in: store)
-        store.select(target, for: .codex)
-        #expect(store.activeAccountIDs[.codex] == "codex-consulting")
-
-        store.undoLastSwitch()
-
-        #expect(store.activeAccountIDs[.codex] == "codex-personal")
-        #expect(store.isActive(previous, for: .codex))
-        #expect(store.lastSwitch == nil)
-        #expect(store.switchMessage?.contains(previous.name) == true)
-    }
-
-    @Test("Undo without a prior switch is a no-op")
-    func undoWithoutPriorSwitchIsANoOp() {
-        let store = makeStore()
-        #expect(store.lastSwitch == nil)
-
-        store.undoLastSwitch()
-
-        #expect(store.activeAccountIDs[.codex] == "codex-personal")
-        #expect(store.lastSwitch == nil)
-        #expect(store.switchMessage == nil)
+        let claude = claudeBackend.map { backend in ClaudeLoginAppAdapter(makeBackend: { backend }) }
+        let codexAdapter = codex.map { fixture in CodexLoginAppAdapter(makeSystem: { fixture.system }) }
+        return ControlStore(claudeLogins: claude ?? ClaudeLoginAppAdapter(), codexLogins: codexAdapter ?? CodexLoginAppAdapter())
     }
 
     // MARK: - Claude saved logins
@@ -282,8 +152,6 @@ struct ControlStoreTests {
             .init(name: "alpha", requiresReLogin: false), .init(name: "beta", requiresReLogin: false)
         ], lastSelectedHint: "beta")))
         #expect(backend.selectCalls == 1)
-        #expect(store.lastSwitch == nil)
-        #expect(store.activeAccountIDs[.codex] == "codex-personal")
     }
 
     @Test("Cancelling the store task still reports the switch's actual outcome")
@@ -331,87 +199,80 @@ struct ControlStoreTests {
         ))
     }
 
-    // MARK: - Provider independence
+    // MARK: - Codex saved logins
 
-    @Test("Switching a Codex account leaves Claude saved logins unchanged")
+    @Test("The default build shows Codex as unavailable instead of mock accounts")
+    func defaultBuildReportsCodexUnavailable() async throws {
+        let store = makeStore()
+        try await #require(store.reloadCodexLogins()).value
+        #expect(store.codexLogins == .unavailable)
+    }
+
+    @Test("Codex lists saved logins with their email and marks the one in auth.json as in use")
+    func codexListsSavedLogins() async throws {
+        let codex = try CodexStoreFixture()
+        defer { codex.cleanup() }
+        let store = makeStore(codex: codex)
+
+        try await #require(store.reloadCodexLogins()).value
+
+        #expect(store.codexLogins == .loaded(.init(logins: [
+            .init(name: "home", email: "b@example.com"), .init(name: "spare", email: "s@example.com"),
+            .init(name: "work", email: "a@example.com")
+        ], inUse: "home")))
+        #expect(store.canSelectCodexLogin(.init(name: "home", email: "b@example.com")) == false)
+        #expect(store.canSelectCodexLogin(.init(name: "work", email: "a@example.com")))
+    }
+
+    @Test("A Codex switch is serialized, swaps auth.json, and asks to restart open sessions")
+    func codexSwitchIsSerialized() async throws {
+        let codex = try CodexStoreFixture()
+        defer { codex.cleanup() }
+        let store = makeStore(codex: codex)
+        try await #require(store.reloadCodexLogins()).value
+
+        let task = try #require(store.selectCodexLogin("work"))
+        #expect(store.codexActivity == .switching("work"))
+        #expect(store.selectCodexLogin("spare") == nil)
+        #expect(store.reloadCodexLogins() == nil)
+        await task.value
+
+        #expect(store.codexActivity == .idle)
+        #expect(store.codexNotice?.text == "Switched Codex to work. Restart open Codex sessions to use it.")
+        if case .loaded(let listing) = store.codexLogins { #expect(listing.inUse == "work") }
+        else { Issue.record("Codex logins were not reloaded") }
+        #expect(codex.live == codex.work)
+    }
+
+    @Test("A refused Codex switch explains why and leaves auth.json alone")
+    func codexRefusalIsExplained() async throws {
+        let codex = try CodexStoreFixture()
+        defer { codex.cleanup() }
+        let store = makeStore(codex: codex)
+        try await #require(store.reloadCodexLogins()).value
+        let stranger = try codexStoreAuth(account: "acct-c", email: "c@example.com")
+        codex.live = stranger
+
+        try await #require(store.selectCodexLogin("work")).value
+
+        #expect(store.codexNotice?.text == "Blocked: the current Codex login (c@example.com) is not saved; save it first.")
+        #expect(codex.live == stranger)
+    }
+
+    @Test("Switching Codex leaves Claude saved logins unchanged")
     func switchingCodexDoesNotAffectClaude() async throws {
-        let store = makeStore(claudeBackend: try SavedLoginBackend())
+        let codex = try CodexStoreFixture()
+        defer { codex.cleanup() }
+        let store = makeStore(claudeBackend: try SavedLoginBackend(), codex: codex)
         try await #require(store.reloadClaudeLogins()).value
+        try await #require(store.reloadCodexLogins()).value
         let claudeState = store.claudeLogins
-        let target = try account("codex-consulting", for: .codex, in: store)
 
-        store.select(target, for: .codex)
+        try await #require(store.selectCodexLogin("work")).value
 
-        #expect(store.activeAccountIDs[.codex] == "codex-consulting")
         #expect(store.claudeLogins == claudeState)
         #expect(store.claudeNotice == nil)
     }
-
-    // MARK: - Refresh
-
-    @Test("Refresh reports progress and completion without wall-clock waiting")
-    func refreshReportsProgressAndCompletion() async throws {
-        let delay = ControlledRefreshDelay()
-        let store = makeStore(refreshDelay: { await delay.wait() })
-
-        let refreshTask = try #require(store.refresh())
-
-        #expect(store.isRefreshing)
-        #expect(store.updatedText == "Refreshing usage…")
-
-        await delay.waitUntilStarted()
-        await delay.complete()
-        await refreshTask.value
-
-        #expect(store.isRefreshing == false)
-        #expect(store.updatedText == "Updated just now")
-    }
-
-    @Test("Refresh suppresses a duplicate while one is in progress")
-    func refreshSuppressesDuplicateWhileInProgress() async throws {
-        let delay = ControlledRefreshDelay()
-        let store = makeStore(refreshDelay: { await delay.wait() })
-        let refreshTask = try #require(store.refresh())
-        await delay.waitUntilStarted()
-
-        let duplicateTask = store.refresh()
-
-        #expect(duplicateTask == nil)
-        #expect(store.isRefreshing)
-        #expect(await delay.callCount == 1)
-
-        await delay.complete()
-        await refreshTask.value
-    }
-
-    @Test("Cancelling refresh restores prior state and permits another refresh")
-    func cancellingRefreshRestoresPriorStateAndPermitsAnotherRefresh() async throws {
-        let delay = ControlledRefreshDelay()
-        let store = makeStore(refreshDelay: { await delay.wait() })
-        let priorUpdatedText = store.updatedText
-        let refreshTask = try #require(store.refresh())
-
-        #expect(store.isRefreshing)
-        #expect(store.updatedText == "Refreshing usage…")
-        await delay.waitUntilStarted()
-
-        refreshTask.cancel()
-        await delay.complete()
-        await refreshTask.value
-
-        #expect(store.isRefreshing == false)
-        #expect(store.updatedText == priorUpdatedText)
-
-        let nextRefreshTask = try #require(store.refresh())
-        await delay.waitUntilStarted(callCount: 2)
-        #expect(store.isRefreshing)
-        #expect(await delay.callCount == 2)
-
-        await delay.complete()
-        await nextRefreshTask.value
-    }
-
-    // MARK: - Menu warning
 
     @Test("The menu-bar warning appears only when Claude needs recovery, never for mock Codex data")
     func menuWarningTracksClaudeRecovery() async throws {
@@ -427,4 +288,56 @@ struct ControlStoreTests {
         try await #require(store.recoverClaudeLogins()).value
         #expect(store.showsMenuWarning == false)
     }
+}
+
+private func codexStoreAuth(account: String, email: String) throws -> Data {
+    let payload = try JSONSerialization.data(withJSONObject: ["email": email]).base64EncodedString()
+        .replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+    return try JSONSerialization.data(withJSONObject: [
+        "auth_mode": "chatgpt",
+        "tokens": ["id_token": "h.\(payload).s", "access_token": "a", "refresh_token": "r", "account_id": account]
+    ], options: [.sortedKeys])
+}
+
+/// Saved Codex logins `work`, `home`, and `spare`, with `home` in auth.json.
+final class CodexStoreFixture: @unchecked Sendable {
+    let directory: URL
+    let work: Data
+    let home: Data
+    private let store = CodexStoreMemory()
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("codex-store-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        work = try codexStoreAuth(account: "acct-a", email: "a@example.com")
+        home = try codexStoreAuth(account: "acct-b", email: "b@example.com")
+        let spare = try codexStoreAuth(account: "acct-s", email: "s@example.com")
+        store.data = try JSONEncoder().encode(CodexLoginState(logins: ["work": work, "home": home, "spare": spare]))
+        live = home
+    }
+
+    var system: CodexLoginSystem {
+        .init(
+            authPath: directory.appendingPathComponent("auth.json").path, store: store,
+            acquireLock: { [directory] in try ManagerFileLock.acquire(directory: directory.appendingPathComponent("lock").path) },
+            keyringHoldsLogin: { false }
+        )
+    }
+
+    var live: Data? {
+        get { FileManager.default.contents(atPath: directory.appendingPathComponent("auth.json").path) }
+        set { try? newValue?.write(to: directory.appendingPathComponent("auth.json")) }
+    }
+
+    func cleanup() { try? FileManager.default.removeItem(at: directory) }
+}
+
+private final class CodexStoreMemory: ClaudeLoginDataStore {
+    var data: Data?
+    func read() throws -> Data {
+        guard let data else { throw IsolatedKeychainError.missing }
+        return data
+    }
+    func create(data: Data) throws { self.data = data }
+    func update(data: Data) throws { self.data = data }
 }
