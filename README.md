@@ -227,8 +227,12 @@ change — stops the switch before it writes anything.
 ./scripts/package-app 0.1.0             # build dist/AI-Control-0.1.0.zip
 ```
 
-Pushing a tag such as `v0.1.0` makes GitHub Actions run the tests, package the
-app and publish it as a release.
+Releases are automatic. Commit messages follow
+[Conventional Commits](https://www.conventionalcommits.org): `feat:` starts the
+next minor version, `fix:` the next patch. On every push to `main`,
+[release-please](https://github.com/googleapis/release-please) keeps a
+"release x.y.z" pull request with the changelog up to date; merging it publishes
+the release, and GitHub Actions attaches the tested, packaged app.
 
 Tests use synthetic logins and temporary directories; they never read real
 credentials. The README images are drawn from built-in example accounts, never
