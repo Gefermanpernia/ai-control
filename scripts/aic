@@ -1,0 +1,16 @@
+#!/bin/sh
+# Short launcher for live Claude login switching.
+#   aic               open the menu-bar app
+#   aic save <name>   save the login Claude is using now
+#   aic use <name>    switch Claude to a saved login
+#   aic list | rename <name> <new-name> | recover
+set -eu
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+binary="$root/.build/debug/AIControl"
+export AI_CONTROL_CLAUDE_LIVE=1
+if [ $# -eq 0 ]; then
+    nohup "$binary" >/dev/null 2>&1 &
+    echo "AI Control is running in the menu bar."
+    exit 0
+fi
+exec "$binary" claude-login "$@"

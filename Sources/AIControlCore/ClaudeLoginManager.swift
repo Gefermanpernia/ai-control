@@ -678,8 +678,8 @@ private func save(
         return 3
     }
     if state.snapshots[alias] == nil {
-        guard state.snapshots.count < 2 else {
-            output("Blocked: two aliases are already saved.")
+        guard state.snapshots.count < ClaudeLoginEnvelopeCodec.maxAliases else {
+            output("Blocked: \(ClaudeLoginEnvelopeCodec.maxAliases) aliases are already saved.")
             return 3
         }
         guard !state.snapshots.values.contains(where: { $0.identity == snapshot.identity }) else {

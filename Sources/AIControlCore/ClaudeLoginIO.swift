@@ -74,6 +74,8 @@ enum ClaudeLoginEnvelopeError: Error, Equatable {
 }
 
 struct ClaudeLoginEnvelopeCodec {
+    static let maxAliases = 10
+
     private struct Envelope: Codable {
         let version: Int
         let snapshots: [String: Snapshot]
@@ -240,7 +242,7 @@ struct ClaudeLoginEnvelopeCodec {
     }
 
     private func validate(_ state: ClaudeLoginState) throws {
-        guard state.snapshots.count <= 2,
+        guard state.snapshots.count <= Self.maxAliases,
               state.snapshots.keys.allSatisfy({ $0.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil }),
               state.activeAlias.map({ state.snapshots[$0] != nil }) ?? true,
               Set(state.snapshots.values.map(\.identity)).count == state.snapshots.count else {

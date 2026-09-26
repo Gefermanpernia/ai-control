@@ -252,21 +252,26 @@ struct ClaudeLoginManagerTests {
         #expect(backend.savedStates.isEmpty)
     }
 
-    @Test("A third alias is refused without persistence")
-    func thirdAliasIsRefusedWithoutPersistence() throws {
-        let first = try snapshot(account: "account-a")
-        let second = try snapshot(account: "account-b")
-        let third = try snapshot(account: "account-c")
+    @Test("A third alias is saved, and an alias beyond the limit is refused without persistence")
+    func aliasLimitIsTen() throws {
         let backend = RecordingClaudeLoginBackend(
-            state: .init(snapshots: ["alpha": first, "beta": second], activeAlias: "alpha"),
-            current: third
+            state: .init(snapshots: ["alpha": try snapshot(account: "account-a"), "beta": try snapshot(account: "account-b")]),
+            current: try snapshot(account: "account-c")
         )
+        func save(_ alias: String) -> Int32 {
+            runClaudeLogins(arguments: ["claude-login", "save", alias], makeBackend: { backend }, output: { _ in }, runGUI: {})
+        }
 
-        let exit = runClaudeLogins(arguments: ["claude-login", "save", "gamma"], makeBackend: { backend }, output: { _ in }, runGUI: {})
-
-        #expect(exit == 3)
-        #expect(backend.savedStates.isEmpty)
-        #expect(backend.state.snapshots.count == 2)
+        #expect(save("gamma") == 0)
+        #expect(backend.state.snapshots.count == 3)
+        for index in 4...10 {
+            backend.current = try snapshot(account: "account-\(index)")
+            #expect(save("alias\(index)") == 0)
+        }
+        backend.current = try snapshot(account: "account-11")
+        #expect(save("alias11") == 3)
+        #expect(backend.state.snapshots.count == 10)
+        #expect(backend.savedStates.count == 8)
     }
 
     @Test("Unusable credentials are not enrolled")
@@ -1869,7 +1874,6 @@ struct ClaudeLoginManagerTests {
         #expect(try ClaudeLoginEnvelopeCodec().decode(#require(store.data)) == expected)
         current = try snapshot(account: "account-c")
         #expect(run("alpha") == 3)
-        #expect(run("gamma") == 3)
         current = try ClaudeLoginSnapshot.capture(
             secureRoot: #"{"claudeAiOauth":null}"#,
             configurationRoot: #"{"oauthAccount":{"accountUuid":"account-b"}}"#
@@ -1878,7 +1882,7 @@ struct ClaudeLoginManagerTests {
         #expect(try ClaudeLoginEnvelopeCodec().decode(#require(store.data)) == expected)
         #expect(store.createCount == 1)
         #expect(store.updateCount == 2)
-        #expect(messages == ["Saved alias alpha.", "Blocked: login is already saved.", "Saved alias beta.", "Saved alias alpha.", "Blocked: alias belongs to another login.", "Blocked: two aliases are already saved.", "Re-login needed before saving this alias."])
+        #expect(messages == ["Saved alias alpha.", "Blocked: login is already saved.", "Saved alias beta.", "Saved alias alpha.", "Blocked: alias belongs to another login.", "Re-login needed before saving this alias."])
         try FileManager.default.removeItem(at: directory)
         #expect(FileManager.default.fileExists(atPath: directory.path) == false)
     }
@@ -3665,8 +3669,7 @@ enum UnsafeEnvelopeCase: CaseIterable {
             return try serializedEnvelope(entries: [
                 ("alpha", try serializedSnapshot()),
                 ("beta", try serializedSnapshot(account: "account-b")),
-                ("gamma", try serializedSnapshot(account: "account-c"))
-            ])
+            ] + (3...11).map { ("alias\($0)", try serializedSnapshot(account: "account-\($0)")) })
         case .duplicateIdentity:
             return try serializedEnvelope(entries: [
                 ("alpha", try serializedSnapshot()), ("beta", try serializedSnapshot())
