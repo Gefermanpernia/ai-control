@@ -1,0 +1,78 @@
+#!/bin/sh
+# Build .deb and Arch-compatible binary tarball on Linux in swift:6.2-bookworm.
+#   scripts/package-linux VERSION
+#   scripts/package-linux --pkgbuild VERSION  # after both architecture tarballs exist in dist/
+set -eu
+cd "$(dirname "$0")/.."
+
+mode=${1:-}
+if [ "$mode" = '--pkgbuild' ]; then
+    version=${2:?usage: scripts/package-linux --pkgbuild VERSION}
+    [ "$#" -eq 2 ] || exit 2
+else
+    version=${1:?usage: scripts/package-linux VERSION}
+    [ "$#" -eq 1 ] || exit 2
+fi
+case "$version" in
+    ''|*[!0-9A-Za-z.+-]*) echo 'Invalid version' >&2; exit 2 ;;
+esac
+mkdir -p dist
+if [ "$mode" = '--pkgbuild' ]; then
+    x86="dist/ai-control-$version-linux-x86_64.tar.gz"
+    arm="dist/ai-control-$version-linux-aarch64.tar.gz"
+    [ -f "$x86" ] && [ -f "$arm" ] || { echo 'Both architecture tarballs are required' >&2; exit 1; }
+    sha_x86=$(sha256sum "$x86" | cut -d ' ' -f 1)
+    sha_arm=$(sha256sum "$arm" | cut -d ' ' -f 1)
+    sed -e "s/@VERSION@/$version/g" -e "s/@SHA256_X86_64@/$sha_x86/g" \
+        -e "s/@SHA256_AARCH64@/$sha_arm/g" packaging/arch/PKGBUILD.in > dist/PKGBUILD
+    echo 'Built dist/PKGBUILD'
+    exit 0
+fi
+[ "$(uname -s)" = Linux ] || { echo 'Package builds require Linux' >&2; exit 1; }
+case "$(uname -m)" in
+    x86_64) deb_arch=amd64; arch=x86_64 ;;
+    aarch64) deb_arch=arm64; arch=aarch64 ;;
+    *) echo 'Unsupported CPU architecture' >&2; exit 1 ;;
+esac
+if ! command -v cargo >/dev/null 2>&1; then
+    export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+    export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+    if ! command -v curl >/dev/null 2>&1; then
+        apt-get update -qq
+        apt-get install -y -qq curl ca-certificates
+    fi
+    curl --fail --location --silent --show-error --output "$HOME/rustup-init.sh" https://sh.rustup.rs
+    sh "$HOME/rustup-init.sh" -y --profile minimal
+    PATH="$CARGO_HOME/bin:$PATH"
+    export PATH
+fi
+swift build -c release --static-swift-stdlib --product AIControl
+(cd tui && cargo build --release --locked)
+engine="$(swift build -c release --show-bin-path)/AIControl"
+stage="dist/.linux-$version-$arch"
+rm -rf "$stage"   # never ship leftovers from an earlier build
+mkdir -p "$stage/usr/lib/ai-control" "$stage/usr/bin" \
+    "$stage/usr/share/licenses/ai-control" "$stage/usr/share/doc/ai-control" "$stage/DEBIAN"
+install -m 755 "$engine" "$stage/usr/lib/ai-control/AIControl"
+install -m 755 tui/target/release/aic-tui "$stage/usr/lib/ai-control/aic-tui"
+install -m 755 scripts/aic "$stage/usr/lib/ai-control/aic"
+strip "$stage/usr/lib/ai-control/AIControl" "$stage/usr/lib/ai-control/aic-tui"
+ln -sfn ../lib/ai-control/aic "$stage/usr/bin/aic"
+ln -sfn ../lib/ai-control/aic-tui "$stage/usr/bin/aic-tui"
+install -m 644 LICENSE "$stage/usr/share/licenses/ai-control/LICENSE"
+install -m 644 LICENSE "$stage/usr/share/doc/ai-control/copyright"
+cat > "$stage/DEBIAN/control" <<EOF
+Package: ai-control
+Version: $version
+Section: utils
+Priority: optional
+Architecture: $deb_arch
+Maintainer: Geferman Pernia <33972248+Gefermanpernia@users.noreply.github.com>
+Depends: libc6 (>= 2.35), libcurl4 | libcurl4t64, libstdc++6, libgcc-s1
+Homepage: https://github.com/Gefermanpernia/ai-control
+Description: Terminal login switcher for Claude Code and Codex CLI
+ AI Control includes a command-line launcher and terminal user interface.
+EOF
+dpkg-deb --root-owner-group --build "$stage" "dist/ai-control_${version}_${deb_arch}.deb"
+tar -czf "dist/ai-control-$version-linux-$arch.tar.gz" --owner=0 --group=0 --numeric-owner -C "$stage" usr
+echo "Built dist/ai-control_${version}_${deb_arch}.deb and dist/ai-control-$version-linux-$arch.tar.gz"

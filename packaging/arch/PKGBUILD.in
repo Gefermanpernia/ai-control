@@ -1,0 +1,17 @@
+# Binary release package; generated with scripts/package-linux --pkgbuild VERSION.
+pkgname=ai-control
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='AI Control terminal login switcher and TUI'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Gefermanpernia/ai-control'
+license=('MIT')
+depends=('curl' 'gcc-libs' 'glibc')
+source_x86_64=("$url/releases/download/v$pkgver/ai-control-$pkgver-linux-x86_64.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/ai-control-$pkgver-linux-aarch64.tar.gz")
+sha256sums_x86_64=('@SHA256_X86_64@')
+sha256sums_aarch64=('@SHA256_AARCH64@')
+
+package() {
+    cp -a "$srcdir/usr" "$pkgdir/"
+}

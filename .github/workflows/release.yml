@@ -2,8 +2,7 @@ name: Release
 
 # release-please keeps a "release x.y.z" pull request up to date from the commit
 # messages on main (feat: bumps the minor version, fix: the patch). Merging it
-# tags the version and creates the GitHub release; the macOS job then tests,
-# packages and attaches AI Control.app.
+# tags the version and creates the GitHub release; platform jobs attach packages.
 on:
   push:
     branches: [main]
@@ -45,3 +44,59 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" "dist/AI-Control-$VERSION.zip"
+
+  linux:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            deb_arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            deb_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - name: Package Linux
+        run: docker run --rm -v "$PWD":/src -w /src swift:6.2-bookworm ./scripts/package-linux "$VERSION"
+      - name: Share tarball for Arch metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/ai-control-${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+      - name: Attach Linux packages to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "dist/ai-control_${VERSION}_${{ matrix.deb_arch }}.deb" "dist/ai-control-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
+
+  arch-metadata:
+    needs: [release-please, linux]
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - name: Generate Arch PKGBUILD
+        run: ./scripts/package-linux --pkgbuild "$VERSION"
+      - name: Attach Arch metadata to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/PKGBUILD

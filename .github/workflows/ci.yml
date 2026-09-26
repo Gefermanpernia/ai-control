@@ -26,6 +26,42 @@ jobs:
       - name: Test
         run: swift test
 
+  # Install the actual packages in clean Debian and Arch containers.
+  packages:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build x86_64 packages
+        run: docker run --rm -v "$PWD":/src -w /src swift:6.2-bookworm ./scripts/package-linux 0.0.0
+      - name: Install Debian packages and smoke test
+        run: |
+          for image in debian:bookworm-slim debian:trixie-slim; do
+            docker run --rm -v "$PWD/dist":/dist:ro "$image" sh -ec '
+              apt-get update -qq
+              apt-get install -y -qq /dist/ai-control_0.0.0_amd64.deb
+              export HOME=$(mktemp -d)
+              aic status --json | grep -q '\''"version":1'\''
+              aic-tui --help
+            '
+          done
+      - name: Install Arch package and smoke test
+        run: |
+          docker run --rm -v "$PWD/dist":/dist:ro -v "$PWD/packaging/arch":/template:ro archlinux:latest sh -ec '
+            pacman -Syu --noconfirm base-devel curl
+            mkdir /build
+            cp /dist/ai-control-0.0.0-linux-x86_64.tar.gz /build/
+            # The source URL is local for CI; the release template keeps its public URL.
+            cp /template/PKGBUILD.in /build/PKGBUILD
+            sed -i "s/@VERSION@/0.0.0/g; s|source_x86_64=.*|source_x86_64=(\"file:///build/ai-control-0.0.0-linux-x86_64.tar.gz\")|; s/@SHA256_X86_64@/SKIP/g; s/@SHA256_AARCH64@/SKIP/g" /build/PKGBUILD
+            useradd -m builder
+            chown -R builder:builder /build
+            su builder -s /bin/sh -c "cd /build && makepkg --noconfirm"
+            pacman -U --noconfirm /build/ai-control-*.pkg.tar.zst
+            export HOME=$(mktemp -d)
+            aic status --json | grep -q '\''"version":1'\''
+            aic-tui --help
+          '
+
   # The terminal UI: formatting, lints and tests.
   tui:
     runs-on: ubuntu-24.04
