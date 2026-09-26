@@ -682,6 +682,9 @@ struct ControlView: View {
             }
             .padding(12)
             .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+            Button("Quit AI Control") { NSApp.terminate(nil) }
+                .buttonStyle(.bordered)
+                .keyboardShortcut("q")
         }
         .padding(12)
     }

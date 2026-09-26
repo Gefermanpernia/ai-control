@@ -43,15 +43,61 @@ You can use AI Control with only one of the two CLIs.
 
 ## Install
 
+**1. Install Apple's developer tools** (skip this if you already have Xcode):
+
+```sh
+xcode-select --install
+```
+
+**2. Download and build AI Control** (the first build takes about a minute):
+
 ```sh
 git clone https://github.com/Gefermanpernia/ai-control.git
 cd ai-control
 swift build
-ln -s "$PWD/scripts/aic" ~/.local/bin/aic   # any directory on your PATH works
 ```
 
-`aic` runs the build in `.build/debug`, so run `swift build` again after pulling
-changes.
+**3. Add the `aic` command:**
+
+```sh
+mkdir -p ~/.local/bin
+ln -s "$PWD/scripts/aic" ~/.local/bin/aic
+```
+
+The Claude Code installer normally puts `~/.local/bin` on your `PATH`. If `aic`
+is not found, add this line to `~/.zshrc` and open a new terminal:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**4. Start it** with `aic`, then follow [Getting started](#getting-started).
+
+### Update
+
+```sh
+cd ai-control
+git pull
+swift build
+```
+
+`aic` runs the build in `.build/debug`, so restart AI Control after building:
+open the menu, click ⚙ and **Quit AI Control**, then run `aic` again.
+
+### Uninstall
+
+Removing AI Control leaves your CLIs signed in to their current accounts. To
+remove it together with the logins it saved:
+
+```sh
+pkill -f .build/debug/AIControl
+rm ~/.local/bin/aic
+security delete-generic-password -s AIControl-claude-logins.v2
+security delete-generic-password -s AIControl-codex-logins.v1
+rm -r ~/Library/Application\ Support/AIControl
+```
+
+Then delete the `ai-control` folder.
 
 ## Getting started
 
