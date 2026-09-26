@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum CLIProvider: String, CaseIterable, Identifiable {
@@ -71,6 +72,29 @@ enum Appearance: String, CaseIterable, Identifiable {
         case .dark: return .dark
         }
     }
+    /// Menu-bar windows ignore `preferredColorScheme`, so the app appearance carries the choice.
+    var appAppearance: NSAppearance? {
+        switch self {
+        case .system: return nil
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+enum ClaudeLoginListState: Equatable {
+    case loading, unavailable, unreadable
+    case loaded(ClaudeLoginAppState)
+}
+
+enum ClaudeLoginActivity: Equatable {
+    case idle, loading, recovering
+    case switching(String)
+}
+
+struct ClaudeLoginNotice: Equatable {
+    let text: String
+    let offersRecovery: Bool
 }
 
 @MainActor
@@ -81,15 +105,6 @@ final class ControlStore: ObservableObject {
     }
 
     private let accountData: [CLIProvider: [Account]] = [
-        .claude: [
-            Account(id: "claude-work", name: "Maya Work", status: .normal,
-                    detail: "Pro plan", usedPercent: 42, resetText: "Resets in 4h"),
-            Account(id: "claude-personal", name: "Personal", status: .warning(remaining: 9),
-                    detail: "Max plan", usedPercent: 91, resetText: "Resets in 42m"),
-            Account(id: "claude-lab", name: "Lab Sandbox",
-                    status: .unavailable(label: "Unavailable"), detail: "Reconnect in Settings",
-                    usedPercent: nil, resetText: "Not checked")
-        ],
         .codex: [
             Account(id: "codex-personal", name: "Personal Plus", status: .normal,
                     detail: "Plus plan", usedPercent: 67, resetText: "Resets in 2h"),
@@ -101,9 +116,10 @@ final class ControlStore: ObservableObject {
         ]
     ]
 
-    @Published private(set) var activeAccountIDs: [CLIProvider: String] = [
-        .claude: "claude-work", .codex: "codex-personal"
-    ]
+    @Published private(set) var activeAccountIDs: [CLIProvider: String] = [.codex: "codex-personal"]
+    @Published private(set) var claudeLogins: ClaudeLoginListState = .loading
+    @Published private(set) var claudeActivity: ClaudeLoginActivity = .idle
+    @Published private(set) var claudeNotice: ClaudeLoginNotice?
     @Published private(set) var lastSwitch: SwitchAction?
     @Published private(set) var switchMessage: String?
     @Published private(set) var isRefreshing = false
@@ -116,11 +132,13 @@ final class ControlStore: ObservableObject {
     @Published var limitWarnings = true
     private let refreshDelay: @Sendable () async -> Void
     private var automaticRefreshTask: Task<Void, Never>?
+    private let claudeAdapter: ClaudeLoginAppAdapter
 
     init(refreshDelay: @escaping @Sendable () async -> Void = {
         try? await Task.sleep(nanoseconds: 700_000_000)
-    }) {
+    }, claudeLogins: ClaudeLoginAppAdapter = ClaudeLoginAppAdapter()) {
         self.refreshDelay = refreshDelay
+        claudeAdapter = claudeLogins
         configureAutomaticRefresh()
     }
 
@@ -149,6 +167,76 @@ final class ControlStore: ObservableObject {
         activeAccountIDs[action.provider] = action.previousID
         switchMessage = "↶ \(action.provider.title) restored to \(account.name)"
         lastSwitch = nil
+    }
+    func canSelectClaudeLogin(_ alias: ClaudeLoginAppState.Alias) -> Bool {
+        claudeActivity == .idle && !alias.requiresReLogin
+    }
+    @discardableResult
+    func reloadClaudeLogins() -> Task<Void, Never>? {
+        guard claudeActivity == .idle else { return nil }
+        claudeActivity = .loading
+        return Task { @MainActor in
+            await applyClaudeList()
+            claudeActivity = .idle
+        }
+    }
+    @discardableResult
+    func selectClaudeLogin(_ alias: String) -> Task<Void, Never>? {
+        guard case .loaded(let state) = claudeLogins,
+              let saved = state.aliases.first(where: { $0.name == alias }),
+              canSelectClaudeLogin(saved) else { return nil }
+        claudeActivity = .switching(alias)
+        claudeNotice = nil
+        // The adapter finishes every started switch; cancelling this task never hides its outcome.
+        return Task { @MainActor [claudeAdapter] in
+            claudeNotice = Self.notice(for: await claudeAdapter.use(alias: alias), alias: alias)
+            await applyClaudeList()
+            claudeActivity = .idle
+        }
+    }
+    @discardableResult
+    func recoverClaudeLogins() -> Task<Void, Never>? {
+        guard claudeActivity == .idle else { return nil }
+        claudeActivity = .recovering
+        claudeNotice = nil
+        return Task { @MainActor [claudeAdapter] in
+            claudeNotice = Self.notice(for: await claudeAdapter.recover(), alias: nil)
+            await applyClaudeList()
+            claudeActivity = .idle
+        }
+    }
+    private func applyClaudeList() async {
+        switch await claudeAdapter.list() {
+        case .listed(let state): claudeLogins = .loaded(state)
+        case .backendUnavailable: claudeLogins = .unavailable
+        default: claudeLogins = .unreadable
+        }
+    }
+    private static func notice(for result: ClaudeLoginAppResult, alias: String?) -> ClaudeLoginNotice? {
+        let name = alias ?? "The login"
+        switch result {
+        case .listed: return nil
+        case .verifiedApplied(let applied):
+            return .init(text: "Applied \(applied). Restart Claude before use.", offersRecovery: false)
+        case .recoveryChecked:
+            return .init(text: "Recovery check finished. Choose a saved login to switch.", offersRecovery: false)
+        case .refused:
+            return .init(text: "Not switched. Claude or its files changed; close Claude and try again.", offersRecovery: false)
+        case .unknownAlias: return .init(text: "\(name) is no longer a saved login.", offersRecovery: false)
+        case .reLoginNeeded:
+            return .init(text: "\(name) needs a new login. Sign in with Claude, then save it again.", offersRecovery: false)
+        case .recoveryRequired:
+            return .init(text: "A previous switch did not finish. Run recovery before switching.", offersRecovery: true)
+        case .backendUnavailable:
+            return .init(text: "Claude login switching is not available in this build.", offersRecovery: false)
+        case .postCommitCleanupUncertain:
+            return .init(text: "\(name) may be applied, but cleanup was not confirmed. Run recovery to check.", offersRecovery: true)
+        case .unverifiedFailure:
+            return .init(text: alias == nil
+                         ? "Recovery could not be verified. Credentials may still need recovery."
+                         : "The switch could not be verified and credentials may have changed. Run recovery to check.",
+                         offersRecovery: true)
+        }
     }
     @discardableResult
     func refresh() -> Task<Void, Never>? {
@@ -217,6 +305,11 @@ struct ControlView: View {
         }
         .frame(width: 400)
         .preferredColorScheme(store.appearance.preferredColorScheme)
+        .onChange(of: store.appearance) { NSApp.appearance = $0.appAppearance }
+        .onAppear {
+            NSApp.appearance = store.appearance.appAppearance
+            store.reloadClaudeLogins()
+        }
     }
 
     private var header: some View {
@@ -241,8 +334,8 @@ struct ControlView: View {
             .frame(width: 28, height: 28)
             .disabled(store.isRefreshing)
             .accessibilityLabel(Text(store.isRefreshing
-                                     ? "Refreshing account usage" : "Refresh account usage"))
-            .help(store.isRefreshing ? "Refreshing account usage" : "Refresh account usage")
+                                     ? "Refreshing Codex mock usage" : "Refresh Codex mock usage"))
+            .help(store.isRefreshing ? "Refreshing Codex mock usage" : "Refresh Codex mock usage")
             Button { store.isShowingSettings.toggle() } label: {
                 Image(systemName: "gearshape")
             }
@@ -258,11 +351,13 @@ struct ControlView: View {
     private var accountList: some View {
         ScrollView {
             VStack(spacing: 12) {
-                ForEach(CLIProvider.allCases) { provider in providerSection(provider) }
+                claudeSection
+                providerSection(.codex)
             }
             .padding(12)
         }
-        .frame(maxHeight: 600)
+        // A menu-bar window sizes to ideal height; without one the list can open collapsed.
+        .frame(minHeight: 420, idealHeight: 520, maxHeight: 600)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("CLI accounts")
     }
@@ -282,8 +377,8 @@ struct ControlView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Label("Ready", systemImage: "checkmark.circle.fill")
-                    .font(.caption2.weight(.medium)).foregroundStyle(.green)
+                Label("Mock data", systemImage: "info.circle")
+                    .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
             }
             VStack(spacing: 4) {
                 ForEach(accounts) { account in
@@ -302,6 +397,91 @@ struct ControlView: View {
             .padding(4)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
         }
+    }
+
+    private var claudeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(CLIProvider.claude.mark)
+                    .font(.caption2.weight(.semibold))
+                    .frame(width: 24, height: 24)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(CLIProvider.claude.title).font(.caption.weight(.semibold))
+                    Text("Saved logins · \(CLIProvider.claude.switchDescription)")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { store.reloadClaudeLogins() } label: {
+                    if store.claudeActivity == .loading { ProgressView().controlSize(.small) }
+                    else { Image(systemName: "arrow.clockwise") }
+                }
+                .buttonStyle(.borderless)
+                .frame(width: 28, height: 28)
+                .disabled(store.claudeActivity != .idle)
+                .accessibilityLabel(Text("Reload saved Claude logins"))
+                .help("Reload saved Claude logins")
+            }
+            claudeContent
+                .padding(4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+            if let notice = store.claudeNotice { claudeNoticeView(notice) }
+        }
+    }
+
+    @ViewBuilder private var claudeContent: some View {
+        switch store.claudeLogins {
+        case .loading:
+            Label("Loading saved logins…", systemImage: "hourglass").claudeMessageStyle()
+        case .unavailable:
+            Label("Login switching is not available in this build.", systemImage: "lock")
+                .claudeMessageStyle()
+        case .unreadable:
+            Label("Saved logins could not be read.", systemImage: "exclamationmark.triangle")
+                .claudeMessageStyle()
+        case .loaded(let state) where state.aliases.isEmpty:
+            Label("No saved logins. In Terminal, sign in with Claude, then run AIControl claude-login save <alias>.",
+                  systemImage: "tray").claudeMessageStyle()
+        case .loaded(let state):
+            VStack(spacing: 4) {
+                ForEach(state.aliases, id: \.name) { alias in
+                    let lastSelected = state.lastSelectedHint == alias.name
+                    let switching = store.claudeActivity == .switching(alias.name)
+                    Button { store.selectClaudeLogin(alias.name) } label: {
+                        SavedLoginRow(alias: alias, lastSelected: lastSelected, switching: switching)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!store.canSelectClaudeLogin(alias))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(alias.name + (alias.requiresReLogin ? ", re-login needed" : ", saved")
+                                             + (lastSelected ? ", last selected" : "")
+                                             + (switching ? ", switching" : "")))
+                    .accessibilityHint(Text(alias.requiresReLogin
+                                            ? "Sign in with Claude, then save this login again"
+                                            : "Switches Claude Code to this saved login"))
+                }
+            }
+        }
+    }
+
+    private func claudeNoticeView(_ notice: ClaudeLoginNotice) -> some View {
+        HStack(spacing: 8) {
+            Label(notice.text, systemImage: notice.offersRecovery ? "exclamationmark.triangle.fill" : "info.circle")
+                .font(.caption)
+                .foregroundStyle(notice.offersRecovery ? Color.orange : Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            if notice.offersRecovery {
+                Button("Run recovery") { store.recoverClaudeLogins() }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(store.claudeActivity != .idle)
+            }
+        }
+        .padding(8)
+        .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
     }
 
     private var settings: some View {
@@ -326,7 +506,7 @@ struct ControlView: View {
                 .padding(12)
                 Divider()
                 Toggle(isOn: $store.automaticRefresh) {
-                    settingCopy("Refresh automatically", help: "Check usage every 5 minutes.")
+                    settingCopy("Refresh automatically", help: "Check Codex mock usage every 5 minutes.")
                 }
                 .toggleStyle(.switch)
                 .padding(12)
@@ -338,7 +518,7 @@ struct ControlView: View {
                 .padding(12)
             }
             .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-            Text("In-memory settings only · No credentials are read or stored")
+            Text("In-memory settings only")
                 .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         }
         .padding(12)
@@ -371,12 +551,56 @@ struct ControlView: View {
                   ? "arrow.clockwise" : "checkmark.circle.fill")
                 .foregroundStyle(store.isRefreshing ? Color.accentColor : Color.green)
             Spacer()
-            Text("Mock data only").foregroundStyle(.secondary)
+            Text("Codex data is mock only").foregroundStyle(.secondary)
         }
         .font(.caption2)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct SavedLoginRow: View {
+    let alias: ClaudeLoginAppState.Alias
+    let lastSelected: Bool
+    let switching: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(alias.name).font(.body.weight(.medium)).lineLimit(1)
+                    if lastSelected {
+                        Label("Last selected", systemImage: "clock.arrow.circlepath")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.tint)
+                    }
+                }
+                Group {
+                    if alias.requiresReLogin {
+                        Label("Re-login needed", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                    } else {
+                        Label("Saved", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                }
+                .font(.caption2)
+            }
+            Spacer(minLength: 8)
+            if switching {
+                ProgressView().controlSize(.small)
+                Text("Switching…").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .opacity(alias.requiresReLogin ? 0.62 : 1)
+        .contentShape(Rectangle())
+    }
+}
+
+private extension View {
+    func claudeMessageStyle() -> some View {
+        font(.caption).foregroundStyle(.secondary).padding(8).fixedSize(horizontal: false, vertical: true)
     }
 }
 

@@ -2696,6 +2696,28 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.resources.secureRoot == fixture.betaSecure)
         #expect(fixture.resources.configurationRoot == fixture.betaConfiguration)
     }
+
+    @Test("Store switches a saved login through the guarded backend and publishes no secrets")
+    @MainActor
+    func storeSwitchesThroughGuardedBackend() async throws {
+        let fixture = try SelectionFixture()
+        defer { fixture.cleanup() }
+        let backend = fixture.backend
+        let store = ControlStore(refreshDelay: {}, claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }))
+        store.automaticRefresh = false
+
+        try await #require(store.reloadClaudeLogins()).value
+        #expect(store.claudeLogins == .loaded(.init(aliases: [
+            .init(name: "alpha", requiresReLogin: false), .init(name: "beta", requiresReLogin: false)
+        ], lastSelectedHint: "alpha")))
+        try await #require(store.selectClaudeLogin("beta")).value
+
+        #expect(store.claudeNotice?.text == "Applied beta. Restart Claude before use.")
+        #expect(try fixture.custody.load().activeAlias == "beta")
+        #expect(fixture.resources.secureRoot == fixture.betaSecure)
+        let published = "\(store.claudeLogins) \(String(describing: store.claudeNotice))"
+        for secret in ["accessToken", "RB", "account-b", "org-b"] { #expect(!published.contains(secret)) }
+    }
 }
 
 private struct AppResultBackend: ClaudeLoginBackend {
