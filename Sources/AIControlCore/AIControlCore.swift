@@ -454,7 +454,7 @@ struct ControlView: View {
                     .disabled(!store.canSelectClaudeLogin(alias))
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(Text(alias.name + (alias.requiresReLogin ? ", re-login needed" : ", saved")
-                                             + (lastSelected ? ", last selected" : "")
+                                             + (lastSelected ? ", selected" : "")
                                              + (switching ? ", switching" : "")))
                     .accessibilityHint(Text(alias.requiresReLogin
                                             ? "Sign in with Claude, then save this login again"
@@ -563,7 +563,7 @@ struct SavedLoginRow: View {
                 HStack(spacing: 6) {
                     Text(alias.name).font(.body.weight(.medium)).lineLimit(1)
                     if lastSelected {
-                        Label("Last selected", systemImage: "clock.arrow.circlepath")
+                        Label("Selected", systemImage: "checkmark")
                             .font(.caption2.weight(.semibold)).foregroundStyle(.tint)
                     }
                 }
