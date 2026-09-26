@@ -240,7 +240,7 @@ struct ClaudeLoginManagerTests {
         #expect(messages == ["Re-saved beta.", "The current Claude login is not saved; nothing to re-save."])
     }
 
-    @Test("Manual second login enrollment ignores a stale active marker")
+    @Test("Manual second login enrollment keeps the first login and marks the new one selected")
     func enrollsDistinctSecondLoginWithoutOverwritingFirst() throws {
         let first = try snapshot(account: "account-a", accessToken: "A")
         let second = try snapshot(account: "account-b", accessToken: "B")
@@ -254,7 +254,7 @@ struct ClaudeLoginManagerTests {
         #expect(exit == 0)
         #expect(backend.state.snapshots["alpha"]?.identity == first.identity)
         #expect(backend.state.snapshots["beta"]?.identity == second.identity)
-        #expect(backend.state.activeAlias == "alpha")
+        #expect(backend.state.activeAlias == "beta")
         #expect(messages.joined().contains("account-") == false)
         #expect(messages.joined().contains("ACCESS") == false)
     }
@@ -1301,7 +1301,7 @@ struct ClaudeLoginManagerTests {
 
         #expect(store.createCount == 1)
         #expect(store.updateCount == 1)
-        #expect(messages.suffix(2) == ["alpha: usable (active hint)", "beta: usable"])
+        #expect(messages.suffix(2) == ["alpha: usable", "beta: usable (active hint)"])
         #expect(messages.joined().contains("account-") == false)
     }
 
@@ -1885,7 +1885,7 @@ struct ClaudeLoginManagerTests {
         current = try snapshot(account: "account-b", accessToken: "B1")
         #expect(run("beta") == 0)
         #expect(try ClaudeLoginEnvelopeCodec().decode(#require(store.data)) == ClaudeLoginState(
-            snapshots: ["alpha": try snapshot(account: "account-a", accessToken: "A1"), "beta": current], activeAlias: "alpha"
+            snapshots: ["alpha": try snapshot(account: "account-a", accessToken: "A1"), "beta": current], activeAlias: "beta"
         ))
         current = try snapshot(account: "account-a", accessToken: "A2")
         #expect(run("alpha") == 0)

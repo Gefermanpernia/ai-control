@@ -690,7 +690,8 @@ private func save(
         }
     }
     state.snapshots[alias] = snapshot
-    if state.activeAlias == nil { state.activeAlias = alias }
+    // The saved login is the live one, so it is also the one Claude now uses.
+    state.activeAlias = alias
     try backend.saveState(state)
     output("Saved alias \(alias).")
     return 0
