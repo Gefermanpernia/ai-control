@@ -510,7 +510,8 @@ struct ControlView: View {
             )
         }
         .buttonStyle(.plain)
-        .disabled(!store.canSelectCodexLogin(login))
+        // Clicking the login already in use does nothing; disabling it would only dim the row.
+        .disabled(store.codexActivity != .idle)
         .contextMenu { renameButton(.codex, alias: login.name) }
         .accessibilityAction(named: Text("Rename")) { startRenaming(.codex, alias: login.name) }
         .accessibilityElement(children: .ignore)
@@ -692,6 +693,7 @@ extension SavedLoginRow {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(window.label) \(Int(window.usedPercent.rounded()))%\(Self.reset(window.resetsAt))")
                             .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                            .lineLimit(1).fixedSize()
                         ProgressView(value: min(window.usedPercent, 100), total: 100)
                             .progressViewStyle(.linear)
                             .tint(window.usedPercent >= 90 ? .red : window.usedPercent >= 70 ? .orange : .accentColor)
@@ -702,7 +704,7 @@ extension SavedLoginRow {
                 }
                 if let resets = usage.resetsAvailable {
                     Label("\(resets) reset\(resets == 1 ? "" : "s")", systemImage: "arrow.counterclockwise")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                 }
             }
         case .unavailable(let reason):
