@@ -1,0 +1,55 @@
+name: PR checks
+
+# Every pull request links an approved issue, carries exactly one type:* label
+# and uses a type/description branch. release-please's own release pull
+# requests are exempt.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  rules:
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Branch name, type label and approved issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref }}
+          BODY: ${{ github.event.pull_request.body }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          set -eu
+          if ! printf '%s' "$BRANCH" | grep -Eq '^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)/[a-z0-9._-]+$'; then
+            echo "::error::Branch '$BRANCH' must be named type/description, for example feat/linux-support."
+            exit 1
+          fi
+          types=$(printf '%s\n' $LABELS | grep -c '^type:' || true)
+          if [ "$types" != 1 ]; then
+            echo "::error::Add exactly one type:* label (found $types)."
+            exit 1
+          fi
+          # Only a keyword at the start of a line counts, so prose mentioning an issue never links it.
+          issue=$(printf '%s\n' "$BODY" | grep -Eio '^(closes|fixes|resolves) #[0-9]+' | head -n 1 | grep -Eo '[0-9]+' || true)
+          if [ -z "$issue" ]; then
+            echo "::error::Link an issue with 'Closes #N' at the start of a line."
+            exit 1
+          fi
+          if ! gh issue view "$issue" -R "$REPO" --json labels --jq '.labels[].name' | grep -qx 'status:approved'; then
+            echo "::error::Issue #$issue must carry the status:approved label."
+            exit 1
+          fi
+          echo "Linked approved issue #$issue."
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shellcheck
+        run: shellcheck scripts/aic scripts/package-app scripts/test
