@@ -5,6 +5,7 @@
 #   aic use <name>    switch Claude to a saved login
 #   aic list | rename <name> <new-name> | recover
 #   aic codex save|use|list|rename ...   the same for Codex
+#   aic codex login <name>               sign in to another Codex account safely and save it
 set -eu
 root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 binary="$root/.build/debug/AIControl"
@@ -16,6 +17,12 @@ if [ $# -eq 0 ]; then
 fi
 if [ "$1" = "codex" ]; then
     shift
+    if [ "${1:-}" = "login" ] && [ $# -eq 2 ]; then
+        # codex login revokes the login in auth.json, so save it and clear the file first.
+        "$binary" codex-login prepare-login
+        codex login
+        exec "$binary" codex-login save "$2"
+    fi
     exec "$binary" codex-login "$@"
 fi
 exec "$binary" claude-login "$@"

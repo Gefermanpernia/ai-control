@@ -94,6 +94,27 @@ struct CodexLoginTests {
         ])
     }
 
+    @Test("Preparing a login re-saves the live login and removes auth.json so codex login has nothing to revoke")
+    func prepareLoginDetachesLiveLogin() throws {
+        let fixture = try CodexFixture()
+        defer { fixture.cleanup() }
+        let a1 = try codexAuth(account: "acct-a", email: "a@example.com", refresh: "ra1")
+        fixture.live = a1
+        #expect(fixture.run("save", "work") == 0)
+        let a2 = try codexAuth(account: "acct-a", email: "a@example.com", refresh: "ra2")
+        fixture.live = a2
+
+        #expect(fixture.run("prepare-login") == 0)
+        #expect(fixture.live == nil)
+        #expect(fixture.run("use", "work") == 0)
+        #expect(fixture.live == a2)
+
+        fixture.live = try codexAuth(account: "acct-c", email: "c@example.com")
+        #expect(fixture.run("prepare-login") == 3)
+        #expect(fixture.live != nil)
+        #expect(fixture.messages.contains("Saved work; auth.json cleared for codex login."))
+    }
+
     @Test("Rename moves a saved Codex login")
     func renameMovesLogin() throws {
         let fixture = try CodexFixture()

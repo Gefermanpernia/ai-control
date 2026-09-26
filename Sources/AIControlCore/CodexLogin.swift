@@ -147,6 +147,25 @@ struct CodexLoginManager {
         guard system.liveData() == target else { throw CodexLoginError.readbackMismatch }
     }
 
+    /// `codex login` revokes whatever login auth.json holds, so re-save it and move it out of the way first.
+    /// Returns the alias that holds the detached login, or nil when Codex was not signed in.
+    func prepareLogin() throws -> String? {
+        let lock = try system.acquireLock()
+        defer { lock.release() }
+        guard let live = system.liveData() else { return nil }
+        var state = try load()
+        guard let source = alias(for: try CodexAuthFile.identity(live), in: state) else {
+            throw CodexLoginError.unsavedLiveLogin
+        }
+        if state.logins[source] != live {
+            state.logins[source] = live
+            try persist(state)
+        }
+        guard system.liveData() == live else { throw CodexLoginError.changedDuringSwitch }
+        guard unlink(system.authPath) == 0 else { throw CodexLoginError.writeFailed }
+        return source
+    }
+
     func rename(_ alias: String, to newAlias: String) throws {
         let lock = try system.acquireLock()
         defer { lock.release() }
@@ -203,6 +222,12 @@ func runCodexLogins(arguments: [String], system: CodexLoginSystem = .current, ou
         case "use" where command.count == 2 && valid(command[1]):
             try manager.use(command[1])
             output("Switched Codex to \(command[1]). Restart open Codex sessions to use it.")
+        case "prepare-login" where command.count == 1:
+            if let alias = try manager.prepareLogin() {
+                output("Saved \(alias); auth.json cleared for codex login.")
+            } else {
+                output("No Codex login to clear.")
+            }
         case "rename" where command.count == 3 && valid(command[1]) && valid(command[2]):
             try manager.rename(command[1], to: command[2])
             output("Renamed Codex login \(command[1]) to \(command[2]).")
