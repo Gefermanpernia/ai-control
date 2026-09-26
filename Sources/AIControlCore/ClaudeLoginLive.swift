@@ -229,7 +229,7 @@ struct ClaudeLiveSystem {
 /// nor AI Control triggers Keychain prompts after a switch. Payloads go on stdin; like Claude Code, payloads
 /// above the `security -i` line limit fall back to argv, which only same-user processes can read and which
 /// could already read this item through the same tool.
-struct SecurityToolKeychainItem: ClaudeLoginDataStore {
+struct SecurityToolKeychainItem: ClaudeLoginDataStore, IsolatedCredentialItem {
     typealias Runner = (_ arguments: [String], _ input: Data?) throws -> (status: Int32, output: Data)
     static let interactiveLimit = 4032
 
@@ -307,6 +307,10 @@ struct SecurityToolKeychainItem: ClaudeLoginDataStore {
         }
     }
 
+    func delete() throws {
+        try Self.check(try run(["delete-generic-password", "-a", account, "-s", service], nil).status)
+    }
+
     static func runSecurity(_ arguments: [String], _ input: Data?) throws -> (status: Int32, output: Data) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
@@ -351,5 +355,74 @@ struct MigratingKeychainStore: ClaudeLoginDataStore {
             return
         }
         try primary.update(data: data, guardedBy: guardMutation)
+    }
+}
+
+/// Runs a program to completion with its output discarded; stops it after `timeout` seconds.
+func runProcess(
+    _ executable: String, _ arguments: [String], environment: [String: String]? = nil,
+    directory: String? = nil, timeout: TimeInterval
+) throws -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    if let environment { process.environment = environment }
+    if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+    try process.run()
+    if finished.wait(timeout: .now() + timeout) == .timedOut {
+        process.terminate()
+        finished.wait()
+        return -1
+    }
+    return process.terminationStatus
+}
+
+/// Fetches a usage endpoint, accepting only a successful response.
+func fetchUsage(_ request: URLRequest) async throws -> Data {
+    let (data, response) = try await URLSession.shared.data(for: request)
+    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw LoginUsage.Error.unreadable }
+    return data
+}
+
+extension ClaudeAppServices {
+    static func live(_ system: ClaudeLiveSystem) -> Self {
+        let claude = system.resolveExecutable(system.launcherPath) ?? system.launcherPath
+        let route = { try ClaudeRoutingValidator.route(system.routingEvidence()) }
+        return .init(
+            liveSnapshot: {
+                let roots = try ClaudeLiveSystem.resources(try route()).readRoots()
+                return try ClaudeLoginSnapshot.capture(secureRoot: roots.secure, configurationRoot: roots.configuration)
+            },
+            renew: { snapshot in
+                let account = try route().account
+                return try ClaudeIsolatedRenewal(
+                    claudeExecutable: claude, keychainAccount: account,
+                    item: { SecurityToolKeychainItem(service: $0, account: account) },
+                    run: { try runProcess($0, $1, environment: $2, directory: $3, timeout: 120) }
+                ).renew(snapshot)
+            },
+            fetch: fetchUsage,
+            signIn: { email in
+                let arguments = ["auth", "login", "--claudeai"] + (email.map { ["--email", $0] } ?? [])
+                guard try runProcess(claude, arguments, timeout: 600) == 0 else { throw LoginUsage.Error.unreadable }
+            }
+        )
+    }
+}
+
+extension CodexAppServices {
+    static var live: Self {
+        .init(fetch: fetchUsage, signIn: {
+            let home = NSHomeDirectory()
+            let candidates = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+                + [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+            guard let codex = candidates.map({ $0 + "/codex" }).first(where: FileManager.default.isExecutableFile(atPath:)),
+                  try runProcess(codex, ["login"], timeout: 600) == 0 else { throw LoginUsage.Error.unreadable }
+        })
     }
 }

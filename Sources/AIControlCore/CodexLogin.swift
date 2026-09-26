@@ -178,6 +178,8 @@ struct CodexLoginManager {
 
     func liveIdentity() -> CodexLoginIdentity? { system.liveData().flatMap { try? CodexAuthFile.identity($0) } }
 
+    func savedLogins() throws -> [String: Data] { try load().logins }
+
     private func alias(for identity: CodexLoginIdentity, in state: CodexLoginState) -> String? {
         state.logins.first { (try? CodexAuthFile.identity($0.value))?.accountID == identity.accountID }?.key
     }
@@ -199,7 +201,7 @@ struct CodexLoginManager {
     }
 }
 
-private extension CodexLoginSystem {
+extension CodexLoginSystem {
     func liveData() -> Data? { FileManager.default.contents(atPath: authPath) }
 }
 
@@ -264,17 +266,98 @@ enum CodexLoginAppResult: Equatable, Sendable {
     case unavailable
 }
 
+/// Usage requests and sign-in for the Codex part of the app.
+struct CodexAppServices {
+    let fetch: (URLRequest) async throws -> Data
+    /// Runs Codex's own sign-in; throws when it does not finish.
+    let signIn: () throws -> Void
+    var now: () -> Date = Date.init
+}
+
 /// Serializes Codex login commands off the main actor; unavailable unless live switching is enabled.
 actor CodexLoginAppAdapter {
     private let makeSystem: (() -> CodexLoginSystem)?
+    private let services: CodexAppServices?
 
-    init() { makeSystem = nil }
-    init(makeSystem: @escaping () -> CodexLoginSystem) { self.makeSystem = makeSystem }
+    init() { makeSystem = nil; services = nil }
+    init(makeSystem: @escaping () -> CodexLoginSystem, services: CodexAppServices? = nil) {
+        self.makeSystem = makeSystem
+        self.services = services
+    }
+
+    /// Usage per saved alias, from auth.json for the live account and saved logins otherwise.
+    /// An expired saved login is not refreshed here: refreshing rotates it, which only Codex should do.
+    func usage() async -> [String: LoginUsageResult] {
+        guard let manager, let services, let saved = try? manager.savedLogins() else { return [:] }
+        let live = manager.system.liveData()
+        let liveAccount = live.flatMap { try? CodexAuthFile.identity($0) }?.accountID
+        var results: [String: LoginUsageResult] = [:]
+        for (alias, login) in saved {
+            let account = (try? CodexAuthFile.identity(login))?.accountID
+            let data = account != nil && account == liveAccount ? live! : login
+            guard let tokens = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["tokens"] as? [String: Any],
+                  let token = tokens["access_token"] as? String, let accountID = tokens["account_id"] as? String else {
+                results[alias] = .unavailable("This login needs a new sign-in.")
+                continue
+            }
+            guard let expiry = Self.expiry(ofJWT: token), expiry.timeIntervalSince(services.now()) > 300 else {
+                results[alias] = .unavailable("Use this account once to refresh its usage.")
+                continue
+            }
+            do {
+                let body = try await services.fetch(UsageRequests.codex(accessToken: token, accountID: accountID))
+                results[alias] = .usage(try LoginUsage.codex(body, fetchedAt: services.now()))
+            } catch {
+                results[alias] = .unavailable("Usage could not be loaded.")
+            }
+        }
+        return results
+    }
+
+    /// Detaches the live login so codex login cannot revoke it, signs in, and saves the new account;
+    /// when sign-in does not finish, the previous login is put back.
+    func add(alias: String) -> LoginEditResult {
+        guard let manager, let services else { return .blocked("Login switching is off. Start AI Control with aic.") }
+        let previous: String?
+        do { previous = try manager.prepareLogin() } catch let error as CodexLoginError {
+            return .blocked(error.message(name: alias, liveEmail: manager.liveIdentity()?.email))
+        } catch { return .blocked("Blocked: saved Codex logins are unavailable.") }
+        do { try services.signIn() } catch {
+            if let previous { try? manager.use(previous) }
+            return .blocked(previous == nil ? "Sign-in did not finish." : "Sign-in did not finish; your previous Codex login is back.")
+        }
+        do {
+            let identity = try manager.save(alias)
+            return .done("Saved Codex login \(alias) (\(identity.email ?? "unknown email")).")
+        } catch let error as CodexLoginError {
+            return .blocked(error.message(name: alias, liveEmail: manager.liveIdentity()?.email))
+        } catch { return .blocked("Blocked: saved Codex logins are unavailable.") }
+    }
+
+    func rename(alias: String, to newAlias: String) -> LoginEditResult {
+        guard let manager else { return .blocked("Login switching is off. Start AI Control with aic.") }
+        do {
+            try manager.rename(alias, to: newAlias)
+            return .done("Renamed Codex login \(alias) to \(newAlias).")
+        } catch let error as CodexLoginError {
+            return .blocked(error.message(name: error == .aliasTaken ? newAlias : alias, liveEmail: nil))
+        } catch { return .blocked("Blocked: saved Codex logins are unavailable.") }
+    }
+
+    private static func expiry(ofJWT token: String) -> Date? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var payload = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+        guard let data = Data(base64Encoded: payload),
+              let exp = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["exp"] as? NSNumber else { return nil }
+        return Date(timeIntervalSince1970: exp.doubleValue)
+    }
 
     static func configured(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> CodexLoginAppAdapter {
-        ClaudeLiveSystem.isEnabled(environment: environment) ? .init(makeSystem: { .current }) : .init()
+        ClaudeLiveSystem.isEnabled(environment: environment) ? .init(makeSystem: { .current }, services: .live) : .init()
     }
 
     func list() -> CodexLoginAppResult {

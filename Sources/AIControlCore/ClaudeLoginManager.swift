@@ -446,19 +446,43 @@ enum ClaudeLoginAppResult: Equatable, Sendable {
     case unverifiedFailure
 }
 
+enum LoginUsageResult: Equatable, Sendable {
+    case usage(LoginUsage)
+    case unavailable(String)
+}
+
+enum LoginEditResult: Equatable, Sendable {
+    case done(String)
+    case blocked(String)
+}
+
+/// What the app needs beyond saved-login storage: the live login, renewal, usage requests and sign-in.
+struct ClaudeAppServices {
+    let liveSnapshot: () throws -> ClaudeLoginSnapshot
+    let renew: (ClaudeLoginSnapshot) throws -> ClaudeLoginSnapshot
+    let fetch: (URLRequest) async throws -> Data
+    /// Runs Claude's own sign-in, optionally pre-filling the email; throws when it does not finish.
+    let signIn: (_ email: String?) throws -> Void
+    var now: () -> Date = Date.init
+}
+
 actor ClaudeLoginAppAdapter {
     private let makeBackend: (() -> any ClaudeLoginBackend)?
+    private let services: ClaudeAppServices?
     private var retainedBackend: (any ClaudeLoginBackend)?
 
-    init() { makeBackend = nil }
-    init(makeBackend: @escaping () -> any ClaudeLoginBackend) { self.makeBackend = makeBackend }
+    init() { makeBackend = nil; services = nil }
+    init(makeBackend: @escaping () -> any ClaudeLoginBackend, services: ClaudeAppServices? = nil) {
+        self.makeBackend = makeBackend
+        self.services = services
+    }
 
     /// Real switching only when `AI_CONTROL_CLAUDE_LIVE=1`; otherwise the app reports it as unavailable.
     static func configured(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> ClaudeLoginAppAdapter {
         guard let makeBackend = ClaudeLiveSystem.configuredBackend(environment: environment) else { return .init() }
-        return .init(makeBackend: makeBackend)
+        return .init(makeBackend: makeBackend, services: .live(.current))
     }
 
     func list() -> ClaudeLoginAppResult {
@@ -483,6 +507,86 @@ actor ClaudeLoginAppAdapter {
             _ = try backend.perform(command: .use) { try $0.selectAlias(alias); return 0 }
             return .verifiedApplied(alias)
         } catch { return failure(error, alias: alias) }
+    }
+
+    /// Usage per saved alias. The live account uses the live login; others use their saved login, and an
+    /// expired saved login is first renewed by Claude itself and saved again.
+    func usage() async -> [String: LoginUsageResult] {
+        guard let backend = backend(), let services else { return [:] }
+        var state = ClaudeLoginState()
+        guard (try? backend.perform(command: .list, operation: { state = try $0.loadState(); return 0 })) == 0 else { return [:] }
+        let live = try? services.liveSnapshot()
+        var results: [String: LoginUsageResult] = [:]
+        for (alias, saved) in state.snapshots.sorted(by: { $0.key < $1.key }) {
+            let isLive = live?.identity == saved.identity
+            guard case .value(let raw) = (isLive ? live! : saved).claudeAiOauth, var access = ClaudeAccess(rawLogin: raw) else {
+                results[alias] = .unavailable("This login needs a new sign-in.")
+                continue
+            }
+            if !isLive && !access.isFresh(at: services.now()) {
+                guard let renewed = try? services.renew(saved), replaceSaved(renewed, as: alias, in: backend),
+                      case .value(let renewedRaw) = renewed.claudeAiOauth, let renewedAccess = ClaudeAccess(rawLogin: renewedRaw) else {
+                    results[alias] = .unavailable("Use this account once to refresh its usage.")
+                    continue
+                }
+                access = renewedAccess
+            }
+            do {
+                let data = try await services.fetch(UsageRequests.claude(accessToken: access.token))
+                results[alias] = .usage(try LoginUsage.claude(data, fetchedAt: services.now()))
+            } catch {
+                results[alias] = .unavailable("Usage could not be loaded.")
+            }
+        }
+        return results
+    }
+
+    /// Has Claude refresh a saved login that is not the live one, and saves the refreshed login.
+    func renew(alias: String) -> LoginEditResult {
+        guard let backend = backend(), let services else { return .blocked("Login switching is off. Start AI Control with aic.") }
+        var state = ClaudeLoginState()
+        guard (try? backend.perform(command: .list, operation: { state = try $0.loadState(); return 0 })) == 0,
+              let saved = state.snapshots[alias] else { return .blocked("Blocked: alias is not saved.") }
+        if let live = try? services.liveSnapshot(), live.identity == saved.identity {
+            return .blocked("\(alias) is the live login; Claude keeps it renewed.")
+        }
+        guard let renewed = try? services.renew(saved), replaceSaved(renewed, as: alias, in: backend) else {
+            return .blocked("Claude could not renew \(alias); its saved login is unchanged unless Claude already rotated it.")
+        }
+        return .done("Renewed \(alias).")
+    }
+
+    /// Re-saves the live login, runs Claude's sign-in, then saves the account it signed in to.
+    func add(alias: String, email: String?) -> LoginEditResult {
+        guard let backend = backend(), let services else { return .blocked("Login switching is off. Start AI Control with aic.") }
+        _ = command(["checkpoint"], backend: backend)
+        do { try services.signIn(email) } catch { return .blocked("Sign-in did not finish; nothing was saved.") }
+        return command(["save", alias], backend: backend)
+    }
+
+    func rename(alias: String, to newAlias: String) -> LoginEditResult {
+        guard let backend = backend() else { return .blocked("Login switching is off. Start AI Control with aic.") }
+        return command(["rename", alias, newAlias], backend: backend)
+    }
+
+    private func command(_ arguments: [String], backend: any ClaudeLoginBackend) -> LoginEditResult {
+        var messages: [String] = []
+        let status = runClaudeLogins(
+            arguments: ["claude-login"] + arguments, makeBackend: { backend }, output: { messages.append($0) }, runGUI: {}
+        )
+        if status == 2 { return .blocked("Names use lowercase letters, digits, - and _, starting with a letter.") }
+        return status == 0 ? .done(messages.last ?? "") : .blocked(messages.last ?? "The change could not be saved.")
+    }
+
+    private func replaceSaved(_ snapshot: ClaudeLoginSnapshot, as alias: String, in backend: any ClaudeLoginBackend) -> Bool {
+        let status = try? backend.perform(command: .save) {
+            var state = try $0.loadState()
+            guard state.snapshots[alias]?.identity == snapshot.identity else { return 3 }
+            state.snapshots[alias] = snapshot
+            try $0.saveState(state)
+            return 0
+        }
+        return status == 0
     }
 
     func recover() -> ClaudeLoginAppResult {
@@ -549,6 +653,9 @@ private enum ClaudeLoginCommand {
 
 @MainActor
 public func runClaudeLogins(arguments: [String]) -> Int32 {
+    if arguments == ["usage"] || (arguments.count == 3 && arguments[0] == "claude-login" && arguments[1] == "renew") {
+        return runAsyncReport(arguments: arguments)
+    }
     if arguments.first == "codex-login" { return runCodexLogins(arguments: arguments, output: { print($0) }) }
     let liveBackend = ClaudeLiveSystem.configuredBackend(environment: ProcessInfo.processInfo.environment)
     return runClaudeLogins(

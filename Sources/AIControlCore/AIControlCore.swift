@@ -46,7 +46,7 @@ enum CodexLoginListState: Equatable {
 }
 
 enum ClaudeLoginActivity: Equatable {
-    case idle, loading, recovering
+    case idle, loading, recovering, signingIn
     case switching(String)
 }
 
@@ -63,6 +63,10 @@ final class ControlStore: ObservableObject {
     @Published private(set) var codexLogins: CodexLoginListState = .loading
     @Published private(set) var codexActivity: ClaudeLoginActivity = .idle
     @Published private(set) var codexNotice: ClaudeLoginNotice?
+    @Published private(set) var claudeUsage: [String: LoginUsageResult] = [:]
+    @Published private(set) var codexUsage: [String: LoginUsageResult] = [:]
+    @Published private(set) var isLoadingClaudeUsage = false
+    @Published private(set) var isLoadingCodexUsage = false
     @Published var isShowingSettings = false
     @Published var appearance: Appearance = .system
     private let claudeAdapter: ClaudeLoginAppAdapter
@@ -148,6 +152,86 @@ final class ControlStore: ObservableObject {
                          offersRecovery: true)
         }
     }
+    private var lastOpened: Date?
+    /// Loads saved logins and their usage when the window opens; usage is never fetched in the background.
+    func windowOpened(now: Date = Date()) {
+        reloadClaudeLogins()
+        reloadCodexLogins()
+        if let lastOpened, now.timeIntervalSince(lastOpened) < 30 { return }
+        lastOpened = now
+        refreshClaudeUsage()
+        refreshCodexUsage()
+    }
+    @discardableResult
+    func refreshClaudeUsage() -> Task<Void, Never>? {
+        guard !isLoadingClaudeUsage else { return nil }
+        isLoadingClaudeUsage = true
+        return Task { @MainActor [claudeAdapter] in
+            claudeUsage = await claudeAdapter.usage()
+            isLoadingClaudeUsage = false
+        }
+    }
+    @discardableResult
+    func refreshCodexUsage() -> Task<Void, Never>? {
+        guard !isLoadingCodexUsage else { return nil }
+        isLoadingCodexUsage = true
+        return Task { @MainActor [codexAdapter] in
+            codexUsage = await codexAdapter.usage()
+            isLoadingCodexUsage = false
+        }
+    }
+    @discardableResult
+    func addClaudeLogin(name: String, email: String?) -> Task<Void, Never>? {
+        guard claudeActivity == .idle else { return nil }
+        claudeActivity = .signingIn
+        claudeNotice = nil
+        let email = email.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+        return Task { @MainActor [claudeAdapter] in
+            claudeNotice = Self.notice(for: await claudeAdapter.add(alias: name, email: email))
+            await applyClaudeList()
+            claudeActivity = .idle
+        }
+    }
+    @discardableResult
+    func renameClaudeLogin(_ alias: String, to newAlias: String) -> Task<Void, Never>? {
+        guard claudeActivity == .idle else { return nil }
+        claudeActivity = .loading
+        return Task { @MainActor [claudeAdapter] in
+            let result = await claudeAdapter.rename(alias: alias, to: newAlias)
+            if case .done = result { claudeUsage[newAlias] = claudeUsage.removeValue(forKey: alias) }
+            claudeNotice = Self.notice(for: result)
+            await applyClaudeList()
+            claudeActivity = .idle
+        }
+    }
+    @discardableResult
+    func addCodexLogin(name: String) -> Task<Void, Never>? {
+        guard codexActivity == .idle else { return nil }
+        codexActivity = .signingIn
+        codexNotice = nil
+        return Task { @MainActor [codexAdapter] in
+            codexNotice = Self.notice(for: await codexAdapter.add(alias: name))
+            await applyCodexList()
+            codexActivity = .idle
+        }
+    }
+    @discardableResult
+    func renameCodexLogin(_ alias: String, to newAlias: String) -> Task<Void, Never>? {
+        guard codexActivity == .idle else { return nil }
+        codexActivity = .loading
+        return Task { @MainActor [codexAdapter] in
+            let result = await codexAdapter.rename(alias: alias, to: newAlias)
+            if case .done = result { codexUsage[newAlias] = codexUsage.removeValue(forKey: alias) }
+            codexNotice = Self.notice(for: result)
+            await applyCodexList()
+            codexActivity = .idle
+        }
+    }
+    private static func notice(for result: LoginEditResult) -> ClaudeLoginNotice {
+        switch result {
+        case .done(let text), .blocked(let text): return .init(text: text, offersRecovery: false)
+        }
+    }
     func canSelectCodexLogin(_ login: CodexLoginListing.Login) -> Bool {
         guard codexActivity == .idle, case .loaded(let listing) = codexLogins else { return false }
         return listing.inUse != login.name
@@ -216,7 +300,17 @@ struct AIControlApp: App {
 }
 
 struct ControlView: View {
+    private struct RenameTarget: Equatable {
+        let provider: CLIProvider
+        let alias: String
+    }
+
     @EnvironmentObject private var store: ControlStore
+    @State private var adding: CLIProvider?
+    @State private var newName = ""
+    @State private var newEmail = ""
+    @State private var renaming: RenameTarget?
+    @State private var renameDraft = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -231,8 +325,11 @@ struct ControlView: View {
         .onChange(of: store.appearance) { NSApp.appearance = $0.appAppearance }
         .onAppear {
             NSApp.appearance = store.appearance.appAppearance
-            store.reloadClaudeLogins()
-            store.reloadCodexLogins()
+            store.windowOpened()
+        }
+        // The menu-bar window is reused, so each time it opens it becomes key again.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            store.windowOpened()
         }
     }
 
@@ -265,13 +362,17 @@ struct ControlView: View {
     private var accountList: some View {
         ScrollView {
             VStack(spacing: 12) {
-                loginSection(.claude, loading: store.claudeActivity == .loading, reload: { store.reloadClaudeLogins() }) {
+                loginSection(.claude, loading: store.claudeActivity == .loading || store.isLoadingClaudeUsage,
+                             canAdd: store.claudeActivity == .idle, reload: { store.reloadClaudeLogins(); store.refreshClaudeUsage() }) {
                     claudeContent
+                    signInArea(.claude)
                 } notice: {
                     store.claudeNotice.map { noticeView($0, recover: { store.recoverClaudeLogins() }) }
                 }
-                loginSection(.codex, loading: store.codexActivity == .loading, reload: { store.reloadCodexLogins() }) {
+                loginSection(.codex, loading: store.codexActivity == .loading || store.isLoadingCodexUsage,
+                             canAdd: store.codexActivity == .idle, reload: { store.reloadCodexLogins(); store.refreshCodexUsage() }) {
                     codexContent
+                    signInArea(.codex)
                 } notice: {
                     store.codexNotice.map { noticeView($0, recover: nil) }
                 }
@@ -285,7 +386,7 @@ struct ControlView: View {
     }
 
     private func loginSection<Content: View, Notice: View>(
-        _ provider: CLIProvider, loading: Bool, reload: @escaping () -> Void,
+        _ provider: CLIProvider, loading: Bool, canAdd: Bool, reload: @escaping () -> Void,
         @ViewBuilder content: () -> Content, @ViewBuilder notice: () -> Notice
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -301,16 +402,26 @@ struct ControlView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button {
+                    newName = ""
+                    newEmail = ""
+                    adding = adding == provider ? nil : provider
+                } label: { Image(systemName: "plus") }
+                .buttonStyle(.borderless)
+                .frame(width: 28, height: 28)
+                .disabled(!canAdd)
+                .accessibilityLabel(Text("Add a \(provider.title) account"))
+                .help("Add a \(provider.title) account")
                 Button(action: reload) {
                     if loading { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }
                 }
                 .buttonStyle(.borderless)
                 .frame(width: 28, height: 28)
                 .disabled(loading)
-                .accessibilityLabel(Text("Reload saved \(provider.title) logins"))
-                .help("Reload saved \(provider.title) logins")
+                .accessibilityLabel(Text("Reload saved \(provider.title) logins and usage"))
+                .help("Reload saved \(provider.title) logins and usage")
             }
-            content()
+            VStack(spacing: 4) { content() }
                 .padding(4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
@@ -332,27 +443,36 @@ struct ControlView: View {
         case .loaded(let state):
             VStack(spacing: 4) {
                 ForEach(state.aliases, id: \.name) { alias in
-                    let selected = state.lastSelectedHint == alias.name
-                    let switching = store.claudeActivity == .switching(alias.name)
-                    Button { store.selectClaudeLogin(alias.name) } label: {
-                        SavedLoginRow(
-                            name: alias.name, detail: alias.requiresReLogin ? "Re-login needed" : "Saved",
-                            symbol: alias.requiresReLogin ? "xmark.octagon.fill" : "checkmark.circle.fill",
-                            tint: alias.requiresReLogin ? .red : .green, selectedLabel: selected ? "Selected" : nil,
-                            switching: switching, dimmed: alias.requiresReLogin
-                        )
+                    if renaming == RenameTarget(provider: .claude, alias: alias.name) {
+                        renameField(.claude, alias: alias.name)
+                    } else {
+                        claudeRow(alias, selected: state.lastSelectedHint == alias.name)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!store.canSelectClaudeLogin(alias))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(Text(alias.name + (alias.requiresReLogin ? ", re-login needed" : ", saved")
-                                             + (selected ? ", selected" : "") + (switching ? ", switching" : "")))
-                    .accessibilityHint(Text(alias.requiresReLogin
-                                            ? "Sign in with Claude, then save this login again"
-                                            : "Switches Claude Code to this saved login"))
                 }
             }
         }
+    }
+
+    private func claudeRow(_ alias: ClaudeLoginAppState.Alias, selected: Bool) -> some View {
+        let switching = store.claudeActivity == .switching(alias.name)
+        let status = alias.requiresReLogin ? ", re-login needed" : ", saved"
+        return Button { store.selectClaudeLogin(alias.name) } label: {
+            SavedLoginRow(
+                name: alias.name, detail: alias.requiresReLogin ? "Re-login needed" : "Saved",
+                symbol: alias.requiresReLogin ? "xmark.octagon.fill" : "checkmark.circle.fill",
+                tint: alias.requiresReLogin ? .red : .green, selectedLabel: selected ? "Selected" : nil,
+                switching: switching, dimmed: alias.requiresReLogin, usage: store.claudeUsage[alias.name]
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!store.canSelectClaudeLogin(alias))
+        .contextMenu { renameButton(.claude, alias: alias.name) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(alias.name + status + (selected ? ", selected" : "") + (switching ? ", switching" : "")))
+        .accessibilityHint(Text(alias.requiresReLogin
+                                ? "Sign in with Claude, then save this login again"
+                                : "Switches Claude Code to this saved login"))
+        .accessibilityAction(named: Text("Rename")) { startRenaming(.claude, alias: alias.name) }
     }
 
     @ViewBuilder private var codexContent: some View {
@@ -368,7 +488,13 @@ struct ControlView: View {
                 .loginMessageStyle()
         case .loaded(let listing):
             VStack(spacing: 4) {
-                ForEach(listing.logins, id: \.name) { login in codexRow(login, inUse: listing.inUse == login.name) }
+                ForEach(listing.logins, id: \.name) { login in
+                    if renaming == RenameTarget(provider: .codex, alias: login.name) {
+                        renameField(.codex, alias: login.name)
+                    } else {
+                        codexRow(login, inUse: listing.inUse == login.name)
+                    }
+                }
             }
         }
     }
@@ -380,14 +506,77 @@ struct ControlView: View {
         return Button { store.selectCodexLogin(login.name) } label: {
             SavedLoginRow(
                 name: login.name, detail: email, symbol: "person.crop.circle", tint: .secondary,
-                selectedLabel: inUse ? "In use" : nil, switching: switching, dimmed: false
+                selectedLabel: inUse ? "In use" : nil, switching: switching, dimmed: false, usage: store.codexUsage[login.name]
             )
         }
         .buttonStyle(.plain)
         .disabled(!store.canSelectCodexLogin(login))
+        .contextMenu { renameButton(.codex, alias: login.name) }
+        .accessibilityAction(named: Text("Rename")) { startRenaming(.codex, alias: login.name) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("\(login.name), \(email)\(state)"))
         .accessibilityHint(Text("Switches Codex to this saved login"))
+    }
+
+    private func renameButton(_ provider: CLIProvider, alias: String) -> some View {
+        Button("Rename…") { startRenaming(provider, alias: alias) }
+    }
+
+    private func startRenaming(_ provider: CLIProvider, alias: String) {
+        renameDraft = alias
+        renaming = RenameTarget(provider: provider, alias: alias)
+    }
+
+    private func renameField(_ provider: CLIProvider, alias: String) -> some View {
+        HStack(spacing: 8) {
+            TextField("New name", text: $renameDraft)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { commitRename(provider, alias: alias) }
+                .accessibilityLabel(Text("New name for \(alias)"))
+            Button("Save") { commitRename(provider, alias: alias) }
+                .buttonStyle(.borderedProminent).controlSize(.small)
+                .disabled(renameDraft.isEmpty || renameDraft == alias)
+            Button("Cancel") { renaming = nil }.buttonStyle(.bordered).controlSize(.small)
+        }
+        .padding(8)
+    }
+
+    private func commitRename(_ provider: CLIProvider, alias: String) {
+        guard !renameDraft.isEmpty, renameDraft != alias else { return }
+        if provider == .claude { store.renameClaudeLogin(alias, to: renameDraft) } else { store.renameCodexLogin(alias, to: renameDraft) }
+        renaming = nil
+    }
+
+    /// The add form while the user names the account, then a waiting row while the browser sign-in runs.
+    @ViewBuilder private func signInArea(_ provider: CLIProvider) -> some View {
+        let activity = provider == .claude ? store.claudeActivity : store.codexActivity
+        if activity == .signingIn {
+            Label("Finish signing in in your browser…", systemImage: "safari")
+                .loginMessageStyle()
+        } else if adding == provider {
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Name, e.g. work", text: $newName)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel(Text("Name for the new \(provider.title) account"))
+                if provider == .claude {
+                    TextField("Email (optional)", text: $newEmail)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel(Text("Email for the new Claude account"))
+                }
+                HStack {
+                    Text("Your browser opens to sign in.").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") { adding = nil }.buttonStyle(.bordered).controlSize(.small)
+                    Button("Sign in") {
+                        if provider == .claude { store.addClaudeLogin(name: newName, email: newEmail) } else { store.addCodexLogin(name: newName) }
+                        adding = nil
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(newName.isEmpty)
+                }
+            }
+            .padding(8)
+        }
     }
 
     private func noticeView(_ notice: ClaudeLoginNotice, recover: (() -> Void)?) -> some View {
@@ -445,6 +634,17 @@ struct ControlView: View {
 }
 
 struct SavedLoginRow: View {
+    private static let time: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }()
+    private static let day: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("EEE j:mm")
+        return formatter
+    }()
+
     let name: String
     let detail: String
     let symbol: String
@@ -452,6 +652,7 @@ struct SavedLoginRow: View {
     let selectedLabel: String?
     let switching: Bool
     let dimmed: Bool
+    var usage: LoginUsageResult? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -464,6 +665,7 @@ struct SavedLoginRow: View {
                     }
                 }
                 Label(detail, systemImage: symbol).foregroundStyle(tint).font(.caption2).lineLimit(1)
+                usageView
             }
             Spacer(minLength: 8)
             if switching {
@@ -478,6 +680,42 @@ struct SavedLoginRow: View {
                     in: RoundedRectangle(cornerRadius: 6))
         .opacity(dimmed ? 0.62 : 1)
         .contentShape(Rectangle())
+    }
+}
+
+extension SavedLoginRow {
+    @ViewBuilder var usageView: some View {
+        switch usage {
+        case .usage(let usage):
+            HStack(spacing: 10) {
+                ForEach(usage.windows, id: \.label) { window in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(window.label) \(Int(window.usedPercent.rounded()))%\(Self.reset(window.resetsAt))")
+                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                        ProgressView(value: min(window.usedPercent, 100), total: 100)
+                            .progressViewStyle(.linear)
+                            .tint(window.usedPercent >= 90 ? .red : window.usedPercent >= 70 ? .orange : .accentColor)
+                            .frame(width: 96)
+                            .accessibilityLabel(Text("\(window.label) usage"))
+                            .accessibilityValue(Text("\(Int(window.usedPercent.rounded())) percent"))
+                    }
+                }
+                if let resets = usage.resetsAvailable {
+                    Label("\(resets) reset\(resets == 1 ? "" : "s")", systemImage: "arrow.counterclockwise")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        case .unavailable(let reason):
+            Text(reason).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private static func reset(_ date: Date?) -> String {
+        guard let date else { return "" }
+        let formatter = Calendar.current.isDate(date, inSameDayAs: Date()) ? time : day
+        return " · " + formatter.string(from: date)
     }
 }
 

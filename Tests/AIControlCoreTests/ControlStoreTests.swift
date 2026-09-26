@@ -21,7 +21,7 @@ private final class SavedLoginBackend: ClaudeLoginBackend {
         return state
     }
     func currentSnapshot() throws -> ClaudeLoginSnapshot { throw ClaudeLoginSelectionError.unavailable }
-    func saveState(_: ClaudeLoginState) throws {}
+    func saveState(_ state: ClaudeLoginState) throws { self.state = state }
     func selectAlias(_ alias: String) throws {
         selectCalls += 1
         if let selectionError { throw selectionError }
@@ -274,6 +274,71 @@ struct ControlStoreTests {
         #expect(store.claudeNotice == nil)
     }
 
+    // MARK: - Usage, rename and add
+
+    @Test("Usage loads after the list, per saved login")
+    func usageLoadsPerLogin() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let body = Data(#"{"five_hour":{"utilization":12.0,"resets_at":null}}"#.utf8)
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 }, fetch: { _ in body }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter())
+
+        try await #require(store.reloadClaudeLogins()).value
+        try await #require(store.refreshClaudeUsage()).value
+
+        guard case .usage(let alpha) = store.claudeUsage["alpha"] else { Issue.record("no usage for alpha"); return }
+        #expect(alpha.windows.first?.usedPercent == 12)
+    }
+
+    @Test("Usage is fetched only when the window opens, at most every 30 seconds, and never after a switch")
+    func usageFetchesOnlyOnOpen() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let counter = FetchCounter()
+        let body = Data(#"{"five_hour":{"utilization":1.0,"resets_at":null}}"#.utf8)
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 }, fetch: { _ in counter.count += 1; return body }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter())
+        let opened = Date()
+
+        store.windowOpened(now: opened)
+        while store.isLoadingClaudeUsage || store.claudeActivity != .idle { await Task.yield() }
+        let afterOpen = counter.count
+        store.windowOpened(now: opened.addingTimeInterval(10))
+        while store.claudeActivity != .idle { await Task.yield() }
+        try await #require(store.selectClaudeLogin("beta")).value
+        #expect(!store.isLoadingClaudeUsage)
+        #expect(counter.count == afterOpen)
+        #expect(afterOpen == 2)
+
+        store.windowOpened(now: opened.addingTimeInterval(31))
+        while store.isLoadingClaudeUsage || store.claudeActivity != .idle { await Task.yield() }
+        #expect(counter.count == afterOpen + 2)
+    }
+
+    @Test("Renaming and adding report their outcome and reload the list")
+    func renameAndAddReportOutcome() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        var signIns: [String?] = []
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 }, fetch: { _ in Data() },
+            signIn: { signIns.append($0); throw CancellationError() }
+        )), codexLogins: CodexLoginAppAdapter())
+        try await #require(store.reloadClaudeLogins()).value
+
+        let add = try #require(store.addClaudeLogin(name: "gamma", email: "g@example.com"))
+        #expect(store.claudeActivity == .signingIn)
+        #expect(store.renameClaudeLogin("alpha", to: "omega") == nil)
+        await add.value
+        #expect(signIns == ["g@example.com"])
+        #expect(store.claudeNotice?.text == "Sign-in did not finish; nothing was saved.")
+
+        try await #require(store.renameClaudeLogin("alpha", to: "omega")).value
+        #expect(store.claudeNotice?.text == "Renamed alias alpha to omega.")
+        if case .loaded(let state) = store.claudeLogins { #expect(state.aliases.map(\.name) == ["beta", "omega"]) }
+        else { Issue.record("list not reloaded") }
+    }
+
     @Test("The menu-bar warning appears only when Claude needs recovery, never for mock Codex data")
     func menuWarningTracksClaudeRecovery() async throws {
         let store = makeStore(claudeBackend: try SavedLoginBackend(
@@ -340,4 +405,8 @@ private final class CodexStoreMemory: ClaudeLoginDataStore {
     }
     func create(data: Data) throws { self.data = data }
     func update(data: Data) throws { self.data = data }
+}
+
+private final class FetchCounter: @unchecked Sendable {
+    var count = 0
 }
