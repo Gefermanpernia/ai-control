@@ -61,4 +61,18 @@ if "$aic" codex login test > "$root/output" 2> "$root/error"; then
     echo 'Custom Windows mount Codex unexpectedly succeeded' >&2; exit 1
 fi
 [ ! -s "$root/output" ] && grep -q 'inside WSL on Windows' "$root/error" || exit 1
-printf 'scripts/test-aic: 7 login checks passed\n'
+checks=7
+# aic hands its engine to the terminal UI. An installed aic starts the real UI, so only the checkout runs this.
+if [ -z "${AIC_UNDER_TEST:-}" ]; then
+    # shellcheck disable=SC2016 # the fake UI must print its own $AIC_ENGINE at run time
+    printf '#!/bin/sh\nprintf "tui-engine:%%s\\n" "$AIC_ENGINE"\n' > "$root/native/aic-tui"
+    chmod +x "$root/native/aic-tui"
+    PATH="$root/native:/usr/bin:/bin"; export PATH
+    unset AIC_ENGINE
+    output=$("$aic" tui)
+    [ "$output" = "tui-engine:$root/engine" ] || { printf 'Unexpected UI engine: %s\n' "$output" >&2; exit 1; }
+    output=$(AIC_ENGINE=/custom/engine "$aic" tui)
+    [ "$output" = "tui-engine:/custom/engine" ] || { printf 'AIC_ENGINE was not kept: %s\n' "$output" >&2; exit 1; }
+    checks=9
+fi
+printf 'scripts/test-aic: %s login checks passed\n' "$checks"

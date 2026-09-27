@@ -48,11 +48,13 @@ pub struct App {
     pub action_success: Option<bool>,
     pub loading: Option<Loading>,
     pub status_loaded: bool,
+    /// The last status read failed, so an unavailable provider may only mean the status is unknown.
+    pub status_failed: bool,
     pub updated: Option<time::OffsetDateTime>,
 }
 impl App {
     pub fn new(status: Status) -> Self {
-        Self {
+        let mut app = Self {
             status,
             provider: 0,
             positions: [0; 2],
@@ -64,8 +66,27 @@ impl App {
             action_success: None,
             loading: None,
             status_loaded: true,
+            status_failed: false,
             updated: None,
+        };
+        app.provider = app.visible().first().copied().unwrap_or(0);
+        app
+    }
+    /// Providers to show: those whose CLI is installed or that have saved logins. Both show until a
+    /// status was read, so a failed read never hides anything.
+    pub fn visible(&self) -> Vec<usize> {
+        if !self.status_loaded || self.status_failed {
+            return vec![0, 1];
         }
+        let claude = &self.status.claude;
+        let codex = &self.status.codex;
+        [
+            (0, claude.installed || !claude.logins.is_empty()),
+            (1, codex.installed || !codex.logins.is_empty()),
+        ]
+        .into_iter()
+        .filter_map(|(provider, shown)| shown.then_some(provider))
+        .collect()
     }
     pub fn name(&self) -> Option<&str> {
         if self.provider == 0 {
@@ -114,6 +135,7 @@ impl App {
     pub fn status_error(&mut self, error: &str) {
         self.loading = None;
         self.status_loaded = true;
+        self.status_failed = true;
         self.message = error.into();
         self.action_success = Some(false);
     }
@@ -164,6 +186,11 @@ impl App {
         );
         self.status = status;
         self.status_loaded = true;
+        self.status_failed = false;
+        let visible = self.visible();
+        if !visible.contains(&self.provider) {
+            self.provider = visible.first().copied().unwrap_or(0);
+        }
         self.loading = None;
         self.updated = Some(time::OffsetDateTime::now_utc());
     }
@@ -248,7 +275,13 @@ impl App {
             Mode::Normal => match key {
                 Key::Char('q') | Key::Esc => return Effect::Quit,
                 Key::Char('r') => return Effect::Reload,
-                Key::Tab => self.provider = 1 - self.provider,
+                // Without a visible provider there is no account to switch, rename or add.
+                _ if self.visible().is_empty() => {}
+                Key::Tab => {
+                    if self.visible().len() == 2 {
+                        self.provider = 1 - self.provider;
+                    }
+                }
                 Key::Up | Key::Char('k') => {
                     self.positions[self.provider] = self.positions[self.provider].saturating_sub(1)
                 }

@@ -158,3 +158,35 @@ fn status_invalid_json_returns_error() {
         .unwrap_err()
         .contains("Invalid engine status"));
 }
+struct Missing;
+impl Runner for Missing {
+    fn run(&self, _: &std::path::Path, _: &[String], _: bool) -> std::io::Result<Output> {
+        Err(std::io::ErrorKind::NotFound.into())
+    }
+}
+#[test]
+fn missing_engine_explains_where_it_looked_and_how_to_fix_it() {
+    let engine = SubprocessEngine::new(PathBuf::from("/opt/tui/AIControl"), Missing);
+    for error in [
+        engine.status(false).unwrap_err(),
+        engine
+            .action("codex-login", "use", "work", None)
+            .unwrap_err(),
+        engine
+            .interactive_add("codex-login", "work", None)
+            .unwrap_err(),
+    ] {
+        assert!(
+            error.contains("AI Control engine not found (/opt/tui/AIControl)"),
+            "{error}"
+        );
+        assert!(error.contains("AIC_ENGINE"), "{error}");
+    }
+}
+#[test]
+fn installed_defaults_to_true_for_older_engines() {
+    let status = parse(SAMPLE).unwrap();
+    assert!(status.claude.installed && status.codex.installed);
+    let status = parse(r#"{"version":1,"claude":{"available":true,"installed":false,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]}}"#).unwrap();
+    assert!(!status.claude.installed && status.codex.installed);
+}

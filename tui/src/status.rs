@@ -33,6 +33,9 @@ pub struct CodexLogin {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Provider<T> {
     pub available: bool,
+    /// Whether the provider's CLI is on this system; engines before 0.3.1 do not report it.
+    #[serde(default = "installed_by_default")]
+    pub installed: bool,
     pub logins: Vec<T>,
     #[serde(default)]
     pub selected: Option<String>,
@@ -44,6 +47,9 @@ pub struct Status {
     pub version: u32,
     pub claude: Provider<ClaudeLogin>,
     pub codex: Provider<CodexLogin>,
+}
+fn installed_by_default() -> bool {
+    true
 }
 pub fn parse(text: &str) -> Result<Status, String> {
     let status: Status =

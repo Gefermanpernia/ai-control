@@ -73,6 +73,9 @@ resolve_native_cli() {
     printf '%s not found. Install it on this system (inside WSL on Windows); a Windows-side %s cannot use these logins.\n' "$cli" "$cli" >&2
     return 1
 }
+# The terminal UI runs the same engine as this launcher, wherever the UI binary itself was found.
+: "${AIC_ENGINE:=$binary}"
+export AIC_ENGINE
 if [ "${1:-}" = "tui" ] && [ $# -eq 1 ]; then
     if [ -x "$here/aic-tui" ]; then exec "$here/aic-tui"; fi
     exec aic-tui

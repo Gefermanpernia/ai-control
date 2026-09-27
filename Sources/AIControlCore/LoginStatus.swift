@@ -57,11 +57,13 @@ struct LoginStatus: Codable {
         let available: Bool
         let selected: String?
         let logins: [Login]
+        let installed: Bool
 
-        enum CodingKeys: String, CodingKey { case available, selected, logins }
+        enum CodingKeys: String, CodingKey { case available, selected, logins, installed }
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(available, forKey: .available)
+            try container.encode(installed, forKey: .installed)
             try container.encode(selected, forKey: .selected)
             try container.encode(logins, forKey: .logins)
         }
@@ -86,11 +88,13 @@ struct LoginStatus: Codable {
         let available: Bool
         let inUse: String?
         let logins: [Login]
+        let installed: Bool
 
-        enum CodingKeys: String, CodingKey { case available, inUse, logins }
+        enum CodingKeys: String, CodingKey { case available, inUse, logins, installed }
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(available, forKey: .available)
+            try container.encode(installed, forKey: .installed)
             try container.encode(inUse, forKey: .inUse)
             try container.encode(logins, forKey: .logins)
         }
@@ -108,7 +112,20 @@ struct LoginStatus: Codable {
 }
 
 /// Builds a provider snapshot without reading usage or invoking renewal unless `includeUsage` is true.
-func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, includeUsage: Bool) async -> LoginStatus {
+/// Which provider CLIs this system has, so interfaces can hide the ones the user does not use.
+struct InstalledCLIs {
+    let claude: Bool
+    let codex: Bool
+
+    static var live: Self {
+        let launcher = NSHomeDirectory() + "/.local/bin/claude"
+        return .init(claude: FileManager.default.isExecutableFile(atPath: launcher) || ExecutableLookup.live(named: "claude") != nil,
+                     codex: ExecutableLookup.live(named: "codex") != nil)
+    }
+}
+
+func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, includeUsage: Bool,
+                 installed: InstalledCLIs = .init(claude: true, codex: true)) async -> LoginStatus {
     let claudeList = await claude.list()
     let codexList = await codex.list()
     let claudeUsage = includeUsage ? await claude.usage() : [:]
@@ -120,18 +137,18 @@ func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, inc
                             logins: listing.aliases.map { alias in
             let (usage, error) = statusUsage(claudeUsage[alias.name])
             return .init(name: alias.name, needsLogin: alias.requiresReLogin, usage: usage, usageError: error)
-        })
+        }, installed: installed.claude)
     } else {
-        claudeState = .init(available: false, selected: nil, logins: [])
+        claudeState = .init(available: false, selected: nil, logins: [], installed: installed.claude)
     }
     let codexState: LoginStatus.Codex
     if case .listed(let listing) = codexList {
         codexState = .init(available: true, inUse: listing.inUse, logins: listing.logins.map { login in
             let (usage, error) = statusUsage(codexUsage[login.name])
             return .init(name: login.name, email: login.email, usage: usage, usageError: error)
-        })
+        }, installed: installed.codex)
     } else {
-        codexState = .init(available: false, inUse: nil, logins: [])
+        codexState = .init(available: false, inUse: nil, logins: [], installed: installed.codex)
     }
     return .init(claude: claudeState, codex: codexState)
 }
