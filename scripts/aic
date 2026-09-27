@@ -1,6 +1,7 @@
 #!/bin/sh
 # Short launcher for live Claude login switching.
-#   aic               open the menu-bar app
+#   aic               open the menu-bar app (macOS) or terminal UI (Linux)
+#   aic tui           open the terminal UI on either platform
 #   aic save <name>   save the login Claude is using now
 #   aic use <name>    switch Claude to a saved login
 #   aic login <name> [email]  sign in to another Claude account and save it
@@ -13,11 +14,21 @@ set -eu
 here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 if [ -x "$here/../MacOS/AIControl" ]; then
     binary="$here/../MacOS/AIControl"              # inside AI Control.app
+elif [ -x "$here/AIControl" ]; then
+    binary="$here/AIControl"                       # Linux package
 else
     binary="$here/../.build/debug/AIControl"       # source checkout
 fi
 export AI_CONTROL_CLAUDE_LIVE=1
+if [ "${1:-}" = "tui" ] && [ $# -eq 1 ]; then
+    if [ -x "$here/aic-tui" ]; then exec "$here/aic-tui"; fi
+    exec aic-tui
+fi
 if [ $# -eq 0 ]; then
+    if [ "$(uname -s)" = "Linux" ]; then
+        if [ -x "$here/aic-tui" ]; then exec "$here/aic-tui"; fi
+        exec aic-tui
+    fi
     nohup "$binary" >/dev/null 2>&1 &
     echo "AI Control is running in the menu bar."
     exit 0

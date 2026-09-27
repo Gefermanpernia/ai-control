@@ -11,10 +11,11 @@
   </picture>
 </p>
 
-AI Control is a small macOS menu-bar app. It keeps a saved copy of each account's
-login, swaps the live login when you pick another account, and shows how much of
-each account's usage limits is left. Logins never leave your Mac: they are kept
-in your login Keychain and are never sent anywhere.
+AI Control is a small macOS menu-bar app, with a terminal UI for Linux. It keeps
+a saved copy of each account's login, swaps the live login when you pick another
+account, and shows how much of each account's usage limits is left. Logins never
+leave your computer: on macOS they are kept in your login Keychain, on Linux in
+files only your user can read, and they are never sent anywhere.
 
 > **Unofficial.** AI Control is not affiliated with or endorsed by Anthropic or
 > OpenAI. It only works with accounts you own. Use it according to each
@@ -34,7 +35,8 @@ in your login Keychain and are never sent anywhere.
 
 ## Requirements
 
-- macOS 13 or later on Apple silicon
+- macOS 13 or later on Apple silicon, or Linux (Debian 12+, Ubuntu 22.04+, Arch)
+  on x86_64 or arm64
 - Claude Code installed with the native installer (`~/.local/bin/claude`)
 - Codex CLI signed in with ChatGPT
 
@@ -99,6 +101,40 @@ export PATH="$HOME/.local/bin:$PATH"
 To update a source build, run `git pull` and `swift build`, then restart AI
 Control: ⚙ → **Quit AI Control**, then `aic`.
 
+### Linux
+
+Download the package for your system from the
+[latest release](https://github.com/Gefermanpernia/ai-control/releases/latest)
+(`amd64`/`x86_64` for Intel and AMD, `arm64`/`aarch64` for ARM).
+
+**Debian and Ubuntu:**
+
+```sh
+sudo apt install ./ai-control_<version>_amd64.deb
+```
+
+**Arch:** download `PKGBUILD` from the release into an empty folder, then
+
+```sh
+makepkg -si
+```
+
+Both install `aic` and `aic-tui`; Swift and Rust are not needed. Run `aic` to
+open the terminal UI:
+
+| Key | What it does |
+|---|---|
+| ↑ ↓ or `j` `k` | Choose an account |
+| `Tab` | Move between Claude and Codex |
+| `Enter` | Switch to the chosen account (asks first) |
+| `a` | Add an account (signing in opens your browser) |
+| `n` | Rename the chosen account |
+| `r` | Reload usage |
+| `q` | Quit |
+
+Usage is loaded when the UI opens and when you press `r`, never in the
+background.
+
 ### Uninstall
 
 Removing AI Control leaves your CLIs signed in to their current accounts. Quit
@@ -114,6 +150,13 @@ rm -r ~/Library/Application\ Support/AIControl
 
 Finally delete **AI Control** from Applications, or the `ai-control` folder if
 you built it from source.
+
+On Linux, remove the package (`sudo apt remove ai-control` or
+`sudo pacman -R ai-control`), then the saved logins:
+
+```sh
+rm -r ~/.local/share/ai-control
+```
 
 ## Getting started
 
@@ -156,7 +199,8 @@ Everything in the menu is also available from the terminal:
 
 | Command | What it does |
 |---|---|
-| `aic` | Open the menu-bar app |
+| `aic` | Open the menu-bar app (macOS) or the terminal UI (Linux) |
+| `aic tui` | Open the terminal UI |
 | `aic login <name> [email]` | Sign in to another Claude account and save it |
 | `aic save <name>` | Save the Claude account that is signed in now |
 | `aic use <name>` | Switch Claude Code to a saved account |
@@ -166,6 +210,7 @@ Everything in the menu is also available from the terminal:
 | `aic usage` | Usage of every saved account |
 | `aic renew <name>` / `aic codex renew <name>` | Renew a saved account's login now |
 | `aic recover` | Finish or undo an interrupted Claude switch |
+| `aic status --json [--usage]` | Saved accounts, and optionally their usage, as JSON for scripts |
 
 Names use lowercase letters, digits, `-` and `_`, starting with a letter.
 
@@ -213,6 +258,7 @@ change — stops the switch before it writes anything.
 ## Limitations
 
 - Not signed by Apple, so macOS asks for confirmation the first time it opens.
+- On Linux there is no tray icon yet; use `aic` or the terminal UI.
 - Claude Code must come from the native installer; other installs are refused.
 - When a Claude Code update changes how logins are stored, switching stops until
   the new build is reviewed.
