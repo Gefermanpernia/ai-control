@@ -825,6 +825,15 @@ final class ManagerFileLock {
     private init(descriptor: Int32) { self.descriptor = descriptor }
 
     static func acquire(directory: String, expectedOwner: uid_t = geteuid()) throws -> ManagerFileLock {
+        // On first use the data directory itself may not exist yet (e.g. ~/.local/share/ai-control on Linux).
+        let parent = (directory as NSString).deletingLastPathComponent
+        if !parent.isEmpty && !FileManager.default.fileExists(atPath: parent) {
+            do {
+                try FileManager.default.createDirectory(
+                    atPath: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+                )
+            } catch { throw ManagerFileLockError.systemFailure }
+        }
         if mkdir(directory, 0o700) != 0 && errno != EEXIST {
             throw ManagerFileLockError.systemFailure
         }
