@@ -173,13 +173,34 @@ pub fn draw(frame: &mut Frame, app: &App) {
         } else {
             Style::default()
         };
+        let selected_line = if i == 0 {
+            app.status.claude.logins.get(app.positions[i]).map(|_| {
+                app.status.claude.logins[..app.positions[i]]
+                    .iter()
+                    .map(|login| 1 + usize::from(login.usage_error.is_some()))
+                    .sum::<usize>()
+            })
+        } else {
+            app.status.codex.logins.get(app.positions[i]).map(|_| {
+                app.status.codex.logins[..app.positions[i]]
+                    .iter()
+                    .map(|login| 1 + usize::from(login.usage_error.is_some()))
+                    .sum::<usize>()
+            })
+        };
+        let offset = selected_line
+            .unwrap_or(0)
+            .saturating_add(1)
+            .saturating_sub(usize::from(area.height.saturating_sub(2)));
         frame.render_widget(
-            Paragraph::new(rows(app, i)).block(
-                Block::default()
-                    .title(*title)
-                    .borders(Borders::ALL)
-                    .border_style(border),
-            ),
+            Paragraph::new(rows(app, i))
+                .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0))
+                .block(
+                    Block::default()
+                        .title(*title)
+                        .borders(Borders::ALL)
+                        .border_style(border),
+                ),
             area,
         );
     }
@@ -261,6 +282,57 @@ mod tests {
             .map(|c| c.symbol())
             .collect::<String>();
         (text, buffer)
+    }
+    fn login_screen(count: usize, errors: bool, cursor: usize) -> Vec<String> {
+        let logins = (0..count)
+            .map(|i| {
+                format!(
+                    r#"{{"name":"login-{i}","needsLogin":false,"usageError":{}}}"#,
+                    if errors { r#""failed""# } else { "null" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let status = format!(
+            r#"{{"version":1,"claude":{{"available":true,"logins":[{logins}]}},"codex":{{"available":false,"logins":[]}}}}"#
+        );
+        let mut app = App::new(parse(&status).unwrap());
+        app.positions[0] = cursor;
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..12)
+            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+    #[test]
+    fn selected_fifth_login_remains_visible() {
+        let screen = login_screen(5, false, 4);
+        assert!(screen.iter().any(|row| row.contains(">  login-4")));
+    }
+    #[test]
+    fn selected_login_with_usage_errors_remains_visible() {
+        let screen = login_screen(5, true, 4);
+        assert!(screen.iter().any(|row| row.contains(">  login-4")));
+    }
+    #[test]
+    fn inactive_provider_keeps_its_own_cursor_visible() {
+        let logins = (0..5)
+            .map(|i| format!(r#"{{"name":"codex-{i}"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let status = format!(
+            r#"{{"version":1,"claude":{{"available":true,"logins":[]}},"codex":{{"available":true,"logins":[{logins}]}}}}"#
+        );
+        let mut app = App::new(parse(&status).unwrap());
+        app.positions[1] = 4;
+        let (text, _) = screen(&app);
+        assert!(text.contains("codex-4"));
+    }
+    #[test]
+    fn fitting_logins_start_on_first_interior_row() {
+        let screen = login_screen(2, false, 1);
+        assert!(screen[1].contains("  login-0"));
     }
     #[test]
     fn pending_first_status_displays_loading_not_unavailable() {
