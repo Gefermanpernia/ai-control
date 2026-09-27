@@ -4,7 +4,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 # AIC_UNDER_TEST points at an installed aic (CI); the default is this checkout's launcher.
 aic=${AIC_UNDER_TEST:-$here/aic}
-root=$(mktemp -d)
+root=$(readlink -f "$(mktemp -d)")
 trap 'rm -r "$root"' EXIT
 mkdir -p "$root/mount/c/npm" "$root/native"
 printf '#!/bin/sh\nprintf "engine:%%s\\n" "$*"\n' > "$root/engine"
@@ -40,4 +40,25 @@ if [ -s "$root/output" ] || ! grep -q 'claude not found.*inside WSL on Windows' 
     echo 'Windows-only Claude did not fail with installation guidance' >&2
     exit 1
 fi
-printf 'scripts/test-aic: 4 login checks passed\n'
+mkdir -p "$root/link" "$root/win/d/npm"
+ln -s "$root/mount/c/npm/codex" "$root/link/codex"
+PATH="$root/link:/usr/bin:/bin"; export PATH
+if "$aic" codex login test > "$root/output" 2> "$root/error"; then
+    echo 'Symlink to Windows Codex unexpectedly succeeded' >&2; exit 1
+fi
+[ ! -s "$root/output" ] && grep -q 'inside WSL on Windows' "$root/error" || exit 1
+
+if (cd "$root" && PATH=":native:/usr/bin:/bin" "$aic" codex login test > "$root/output" 2> "$root/error"); then
+    echo 'Empty or relative PATH Codex unexpectedly succeeded' >&2; exit 1
+fi
+[ ! -s "$root/output" ] && grep -q 'inside WSL on Windows' "$root/error" || exit 1
+
+cp "$root/mount/c/npm/codex" "$root/win/d/npm/codex"
+printf '/dev/sdc / ext4 rw 0 0\nD: %s drvfs rw,noatime 0 0\n' "$root/win/d" > "$root/mounts"
+AIC_TEST_MOUNTS="$root/mounts"; export AIC_TEST_MOUNTS
+PATH="$root/win/d/npm:/usr/bin:/bin"; export PATH
+if "$aic" codex login test > "$root/output" 2> "$root/error"; then
+    echo 'Custom Windows mount Codex unexpectedly succeeded' >&2; exit 1
+fi
+[ ! -s "$root/output" ] && grep -q 'inside WSL on Windows' "$root/error" || exit 1
+printf 'scripts/test-aic: 7 login checks passed\n'

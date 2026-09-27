@@ -23,20 +23,47 @@ fi
 if [ -n "${AIC_TEST_BINARY:-}" ]; then binary=$AIC_TEST_BINARY; fi
 export AI_CONTROL_CLAUDE_LIVE=1
 
-# Tests override the mount root to exercise WSL PATH filtering without creating /mnt/c.
+# Tests override the fallback root and mount table without requiring a real WSL drive.
 windows_mount_root=${AIC_TEST_WINDOWS_MOUNT_ROOT:-/mnt}
+# AIC_TEST_MOUNTS is a test-only path to a substitute /proc/self/mounts file.
+mount_table=${AIC_TEST_MOUNTS:-/proc/self/mounts}
+windows_mounts=
+if [ -f "$mount_table" ]; then
+    windows_mounts=$(awk '
+        $3 == "drvfs" || ($3 == "9p" && $4 ~ /(^|,)aname=drvfs(;|,|$)/) {
+            mount = $2
+            gsub(/\\040/, " ", mount)
+            gsub(/\\011/, "\t", mount)
+            gsub(/\\012/, "\n", mount)
+            gsub(/\\134/, "\\", mount)
+            print mount
+        }
+    ' "$mount_table")
+fi
+is_windows_path() {
+    case $1 in
+        *.[eE][xX][eE]|*.[cC][mM][dD]|*.[bB][aA][tT]|"$windows_mount_root"/[a-zA-Z]/*) return 0 ;;
+    esac
+    while IFS= read -r mount; do
+        [ -n "$mount" ] || continue
+        case $1 in "$mount"|"$mount"/*) return 0 ;; esac
+    done <<EOF
+$windows_mounts
+EOF
+    return 1
+}
 resolve_native_cli() {
     cli=$1
     old_ifs=$IFS
     IFS=:
     for directory in $PATH; do
-        [ -n "$directory" ] || directory=.
+        case $directory in /*) ;; *) continue ;; esac
         candidate=$directory/$cli
-        case $candidate in
-            "$windows_mount_root"/[a-zA-Z]/*) continue ;;
-            *.[eE][xX][eE]|*.[cC][mM][dD]|*.[bB][aA][tT]) continue ;;
-        esac
+        is_windows_path "$candidate" && continue
         if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            resolved=$(readlink -f "$candidate") || continue
+            [ -n "$resolved" ] || continue
+            is_windows_path "$resolved" && continue
             IFS=$old_ifs
             printf '%s\n' "$candidate"
             return 0

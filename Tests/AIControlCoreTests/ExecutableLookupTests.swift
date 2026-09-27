@@ -28,6 +28,37 @@ struct ExecutableLookupTests {
         #expect(ExecutableLookup.isWindowsSide("/usr/local/bin/codex.CmD"))
     }
 
+    @Test("Rejects symlinks into Windows mounts and Windows-suffixed targets")
+    func rejectsResolvedWindowsPaths() {
+        let mounts = ["/win/d"]
+        #expect(ExecutableLookup.first(named: "codex", path: "/usr/local/bin:/native", extraDirectories: [],
+            isExecutable: { _ in true }, resolve: { $0 == "/usr/local/bin/codex" ? "/win/d/npm/codex" : $0 },
+            windowsMounts: mounts) == "/native/codex")
+        #expect(ExecutableLookup.first(named: "codex", path: "/usr/local/bin", extraDirectories: [],
+            isExecutable: { _ in true }, resolve: { _ in "/opt/npm/codex.CMD" },
+            windowsMounts: []) == nil)
+    }
+
+    @Test("Skips empty and relative PATH entries and unresolved candidates")
+    func skipsUnsafeEntries() {
+        let found = ExecutableLookup.first(named: "codex", path: ":relative:.:/broken:/native",
+            extraDirectories: [], isExecutable: { _ in true },
+            resolve: { $0 == "/broken/codex" ? nil : $0 }, windowsMounts: [])
+        #expect(found == "/native/codex")
+    }
+
+    @Test("Parses Windows drive mounts including escaped mount points and component boundaries")
+    func mountTable() {
+        let table = #"C:\134 /mnt/c 9p rw,aname=drvfs;path=C:\;uid=1000 0 0"# + "\n" +
+            #"D:\134 /win/d\040drive drvfs rw,noatime 0 0"# + "\n" +
+            "/dev/sdc / ext4 rw,relatime 0 0\n"
+        let mounts = ExecutableLookup.windowsMounts(fromMountTable: table)
+        #expect(mounts == ["/mnt/c", "/win/d drive"])
+        #expect(ExecutableLookup.isWindowsSide("/win/d drive/npm/codex", windowsMounts: mounts))
+        #expect(!ExecutableLookup.isWindowsSide("/win/d drive-extra/npm/codex", windowsMounts: mounts))
+        #expect(!ExecutableLookup.isWindowsSide("/mnt/cache/npm/codex", windowsMounts: []))
+    }
+
     @Test("Missing native Codex gives actionable installation guidance")
     func missingNativeCodexGuidance() {
         #expect(NativeCodexRequired.missing.localizedDescription.contains("inside WSL on Windows"))

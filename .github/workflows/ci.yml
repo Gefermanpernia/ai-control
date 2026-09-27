@@ -91,6 +91,28 @@ jobs:
           aic status --json | grep -q '"version"'
           aic-tui --help
           AIC_UNDER_TEST=/usr/bin/aic sh ./scripts/test-aic
+          grep -E ' (drvfs|9p) ' /proc/self/mounts || true
+          drive=
+          for letter in c d; do
+            if grep -Eq " /mnt/$letter (drvfs|9p) " /proc/self/mounts &&
+               mkdir -p "/mnt/$letter/Users/Public/aic-ci"; then
+              drive="/mnt/$letter/Users/Public/aic-ci"
+              break
+            fi
+          done
+          [ -n "$drive" ]
+          work=$(mktemp -d)
+          marker=$work/ran
+          engine=$work/engine
+          printf '#!/bin/sh\nprintf "engine ran\\n" >> "%s"\n' "$marker" > "$engine"
+          printf '#!/bin/sh\nprintf "windows ran\\n" >> "%s"\n' "$marker" > "$drive/codex"
+          chmod +x "$engine" "$drive/codex"
+          ln -s "$drive/codex" /usr/local/bin/codex
+          if AIC_TEST_BINARY="$engine" aic codex login ci > "$work/output" 2> "$work/error"; then
+            echo 'Windows Codex unexpectedly ran' >&2; exit 1
+          fi
+          grep -q 'inside WSL on Windows' "$work/error"
+          [ ! -e "$marker" ]
 
   # The terminal UI: formatting, lints and tests.
   tui:
