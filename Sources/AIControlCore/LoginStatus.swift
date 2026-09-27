@@ -100,17 +100,45 @@ struct LoginStatus: Codable {
         }
     }
 
+    struct ModelUsage: Codable {
+        let model: String
+        let totalTokens: Int
+        let quotaTokens: Int?
+        let usedPercent: Double?
+        let resetsAt: Date?
+
+        enum CodingKeys: String, CodingKey { case model, totalTokens, quotaTokens, usedPercent, resetsAt }
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(model, forKey: .model)
+            try container.encode(totalTokens, forKey: .totalTokens)
+            try container.encode(quotaTokens, forKey: .quotaTokens)
+            try container.encode(usedPercent, forKey: .usedPercent)
+            try container.encode(resetsAt, forKey: .resetsAt)
+        }
+    }
+
     struct Monitor: Codable {
         let id: String
         let name: String
         let usage: Usage?
+        let models: [ModelUsage]?
         let error: String?
 
-        enum CodingKeys: String, CodingKey { case id, name, usage, error }
+        init(id: String, name: String, usage: Usage?, models: [ModelUsage]? = nil, error: String?) {
+            self.id = id
+            self.name = name
+            self.usage = usage
+            self.models = models
+            self.error = error
+        }
+
+        enum CodingKeys: String, CodingKey { case id, name, usage, models, error }
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(id, forKey: .id)
             try container.encode(name, forKey: .name)
+            try container.encode(models, forKey: .models)
             try container.encode(usage, forKey: .usage)
             try container.encode(error, forKey: .error)
         }
