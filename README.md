@@ -130,6 +130,7 @@ open the terminal UI:
 | `Enter` | Switch to the chosen account (asks first) |
 | `a` | Add an account (signing in opens your browser) |
 | `n` | Rename the chosen account |
+| `s` | Save the account you are signed in to now |
 | `r` | Reload usage |
 | `q` | Quit |
 

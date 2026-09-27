@@ -33,6 +33,7 @@ pub enum Mode {
     Normal,
     Confirm,
     Rename,
+    Save,
     AddAlias,
     AddEmail,
 }
@@ -120,6 +121,7 @@ impl App {
         self.message = match verb {
             "use" => "Switching…",
             "rename" => "Renaming…",
+            "save" => "Saving…",
             _ => "Working…",
         }
         .into();
@@ -213,7 +215,7 @@ impl App {
                 }
                 self.target = None;
             }
-            Mode::Rename | Mode::AddAlias | Mode::AddEmail => match key {
+            Mode::Rename | Mode::Save | Mode::AddAlias | Mode::AddEmail => match key {
                 Key::Esc => {
                     self.mode = Mode::Normal;
                     self.target = None;
@@ -249,6 +251,7 @@ impl App {
                                 self.target.take().unwrap(),
                                 Some(self.input.clone()),
                             ),
+                            Mode::Save => ("save", self.input.clone(), None),
                             Mode::AddAlias => ("add", self.input.clone(), None),
                             _ => (
                                 "add",
@@ -301,6 +304,10 @@ impl App {
                     } else {
                         Mode::Rename
                     };
+                    self.input.clear();
+                }
+                Key::Char('s') => {
+                    self.mode = Mode::Save;
                     self.input.clear();
                 }
                 Key::Char('a') => {

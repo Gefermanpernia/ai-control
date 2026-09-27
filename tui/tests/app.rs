@@ -288,3 +288,44 @@ fn nothing_to_act_on_when_no_provider_is_visible() {
     app.key(Key::Char('a'));
     assert_eq!(app.mode, Mode::Normal);
 }
+#[test]
+fn save_names_the_current_login_for_the_chosen_provider() {
+    let mut app = App::new(parse(CLAUDE_ONLY).unwrap());
+    app.key(Key::Char('s'));
+    assert_eq!(app.mode, Mode::Save);
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    assert!(app.message.contains("Invalid alias"));
+    type_text(&mut app, "personal");
+    assert_eq!(
+        app.key(Key::Enter),
+        Effect::Action {
+            provider: "claude-login",
+            verb: "save",
+            alias: "personal".into(),
+            extra: None
+        }
+    );
+    assert_eq!(app.mode, Mode::Normal);
+    let mut app = two_logins();
+    app.key(Key::Tab);
+    app.key(Key::Char('s'));
+    type_text(&mut app, "work");
+    assert_eq!(
+        app.key(Key::Enter),
+        Effect::Action {
+            provider: "codex-login",
+            verb: "save",
+            alias: "work".into(),
+            extra: None
+        }
+    );
+}
+#[test]
+fn escape_cancels_save() {
+    let mut app = app();
+    app.key(Key::Char('s'));
+    type_text(&mut app, "abc");
+    assert_eq!(app.key(Key::Esc), Effect::None);
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.input.is_empty());
+}
