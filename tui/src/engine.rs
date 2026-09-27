@@ -46,6 +46,31 @@ pub fn message(stdout: &[u8], stderr: &[u8]) -> String {
         })
         .unwrap_or_else(|| "Engine returned no message".into())
 }
+/// A failed command keeps the engine's own line (its result is always the last stdout line) and adds the
+/// last stderr line, where a crash or a sign-in tool puts the underlying error.
+fn failure_message(stdout: &[u8], stderr: &[u8]) -> String {
+    let line = message(stdout, stderr);
+    let detail = String::from_utf8_lossy(stderr)
+        .lines()
+        .rev()
+        .find(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_owned());
+    match detail {
+        Some(detail) if detail != line => format!("{line} ({detail})"),
+        _ => line,
+    }
+}
+fn outcome(out: &Output) -> Outcome {
+    let success = out.status.success();
+    Outcome {
+        success,
+        message: if success {
+            message(&out.stdout, &out.stderr)
+        } else {
+            failure_message(&out.stdout, &out.stderr)
+        },
+    }
+}
 #[derive(Debug)]
 pub struct Outcome {
     pub success: bool,
@@ -84,16 +109,27 @@ impl Runner for ProcessRunner {
         }
     }
 }
+/// Shows the engine's output as it arrives and keeps a copy; interrupted reads are retried.
 fn forward(mut reader: impl Read, mut writer: impl Write) -> Vec<u8> {
     let mut all = Vec::new();
     let mut chunk = [0; 4096];
-    while let Ok(n) = reader.read(&mut chunk) {
-        if n == 0 {
-            break;
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let _ = writer.write_all(&chunk[..n]);
+                let _ = writer.flush();
+                all.extend_from_slice(&chunk[..n]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                let note = format!("\nCould not read the engine output: {error}\n");
+                let _ = writer.write_all(note.as_bytes());
+                let _ = writer.flush();
+                all.extend_from_slice(note.as_bytes());
+                break;
+            }
         }
-        let _ = writer.write_all(&chunk[..n]);
-        let _ = writer.flush();
-        all.extend_from_slice(&chunk[..n]);
     }
     all
 }
@@ -129,10 +165,7 @@ impl<R: Runner> SubprocessEngine<R> {
             .runner
             .run(&self.path, &args, true)
             .map_err(|e| run_error(&self.path, e))?;
-        Ok(Outcome {
-            success: out.status.success(),
-            message: message(&out.stdout, &out.stderr),
-        })
+        Ok(outcome(&out))
     }
 }
 impl<R: Runner> Engine for SubprocessEngine<R> {
@@ -146,7 +179,7 @@ impl<R: Runner> Engine for SubprocessEngine<R> {
             .run(&self.path, &args, false)
             .map_err(|e| run_error(&self.path, e))?;
         if !out.status.success() {
-            return Err(message(&out.stdout, &out.stderr));
+            return Err(failure_message(&out.stdout, &out.stderr));
         }
         parse(&String::from_utf8(out.stdout).map_err(|e| e.to_string())?)
     }
@@ -165,9 +198,60 @@ impl<R: Runner> Engine for SubprocessEngine<R> {
             .runner
             .run(&self.path, &args, false)
             .map_err(|e| run_error(&self.path, e))?;
-        Ok(Outcome {
-            success: out.status.success(),
-            message: message(&out.stdout, &out.stderr),
-        })
+        Ok(outcome(&out))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward;
+    use std::io::{self, Read};
+
+    /// Returns the queued results in order, then end of file.
+    struct Script(Vec<io::Result<&'static [u8]>>);
+    impl Read for Script {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.0.is_empty() {
+                return Ok(0);
+            }
+            match self.0.remove(0) {
+                Ok(bytes) => {
+                    buf[..bytes.len()].copy_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+                Err(error) => Err(error),
+            }
+        }
+    }
+
+    #[test]
+    fn interrupted_reads_are_retried() {
+        let mut shown = Vec::new();
+        let kept = forward(
+            Script(vec![
+                Ok(b"one\n"),
+                Err(io::ErrorKind::Interrupted.into()),
+                Ok(b"two\n"),
+            ]),
+            &mut shown,
+        );
+        assert_eq!(kept, b"one\ntwo\n");
+        assert_eq!(shown, b"one\ntwo\n");
+    }
+
+    #[test]
+    fn other_read_errors_are_reported() {
+        let mut shown = Vec::new();
+        let kept = forward(
+            Script(vec![Ok(b"one\n"), Err(io::Error::other("broken pipe"))]),
+            &mut shown,
+        );
+        let kept = String::from_utf8(kept).unwrap();
+        assert!(kept.starts_with("one\n"), "{kept}");
+        assert!(
+            kept.contains("Could not read the engine output: broken pipe"),
+            "{kept}"
+        );
+        assert_eq!(String::from_utf8(shown).unwrap(), kept);
     }
 }
