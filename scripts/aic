@@ -19,7 +19,33 @@ elif [ -x "$here/AIControl" ]; then
 else
     binary="$here/../.build/debug/AIControl"       # source checkout
 fi
+# Test-only engine substitution keeps login smoke tests away from real credentials.
+if [ -n "${AIC_TEST_BINARY:-}" ]; then binary=$AIC_TEST_BINARY; fi
 export AI_CONTROL_CLAUDE_LIVE=1
+
+# Tests override the mount root to exercise WSL PATH filtering without creating /mnt/c.
+windows_mount_root=${AIC_TEST_WINDOWS_MOUNT_ROOT:-/mnt}
+resolve_native_cli() {
+    cli=$1
+    old_ifs=$IFS
+    IFS=:
+    for directory in $PATH; do
+        [ -n "$directory" ] || directory=.
+        candidate=$directory/$cli
+        case $candidate in
+            "$windows_mount_root"/[a-zA-Z]/*) continue ;;
+            *.[eE][xX][eE]|*.[cC][mM][dD]|*.[bB][aA][tT]) continue ;;
+        esac
+        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            IFS=$old_ifs
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    IFS=$old_ifs
+    printf '%s not found. Install it on this system (inside WSL on Windows); a Windows-side %s cannot use these logins.\n' "$cli" "$cli" >&2
+    return 1
+}
 if [ "${1:-}" = "tui" ] && [ $# -eq 1 ]; then
     if [ -x "$here/aic-tui" ]; then exec "$here/aic-tui"; fi
     exec aic-tui
@@ -35,8 +61,9 @@ if [ $# -eq 0 ]; then
 fi
 if [ "$1" = "login" ] && { [ $# -eq 2 ] || [ $# -eq 3 ]; }; then
     # claude auth login keeps the previous login valid; re-save it first so its latest refresh is kept.
+    native_claude=$(resolve_native_cli claude) || exit 1
     "$binary" claude-login checkpoint
-    if [ $# -eq 3 ]; then claude auth login --claudeai --email "$3"; else claude auth login --claudeai; fi
+    if [ $# -eq 3 ]; then "$native_claude" auth login --claudeai --email "$3"; else "$native_claude" auth login --claudeai; fi
     exec "$binary" claude-login save "$2"
 fi
 if [ "$1" = "usage" ]; then exec "$binary" usage; fi
@@ -49,8 +76,9 @@ if [ "$1" = "codex" ]; then
     shift
     if [ "${1:-}" = "login" ] && [ $# -eq 2 ]; then
         # codex login revokes the login in auth.json, so save it and clear the file first.
+        native_codex=$(resolve_native_cli codex) || exit 1
         "$binary" codex-login prepare-login
-        codex login
+        "$native_codex" login
         exec "$binary" codex-login save "$2"
     fi
     exec "$binary" codex-login "$@"

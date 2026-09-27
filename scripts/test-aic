@@ -1,0 +1,43 @@
+#!/bin/sh
+# Isolated login smoke tests: neither the engine nor the CLIs touch real credentials.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+# AIC_UNDER_TEST points at an installed aic (CI); the default is this checkout's launcher.
+aic=${AIC_UNDER_TEST:-$here/aic}
+root=$(mktemp -d)
+trap 'rm -r "$root"' EXIT
+mkdir -p "$root/mount/c/npm" "$root/native"
+printf '#!/bin/sh\nprintf "engine:%%s\\n" "$*"\n' > "$root/engine"
+printf '#!/bin/sh\nprintf "windows:%%s\\n" "$*"\n' > "$root/mount/c/npm/codex"
+printf '#!/bin/sh\nprintf "windows-claude:%%s\\n" "$*"\n' > "$root/mount/c/npm/claude"
+printf '#!/bin/sh\nprintf "native:%%s\\n" "$*"\n' > "$root/native/codex"
+printf '#!/bin/sh\nprintf "native-claude:%%s\\n" "$*"\n' > "$root/native/claude"
+chmod +x "$root/engine" "$root/mount/c/npm/codex" "$root/mount/c/npm/claude" "$root/native/codex" "$root/native/claude"
+export AIC_TEST_BINARY="$root/engine" AIC_TEST_WINDOWS_MOUNT_ROOT="$root/mount"
+PATH="$root/mount/c/npm:$root/native:/usr/bin:/bin"; export PATH
+output=$("$aic" codex login test)
+[ "$output" = 'engine:codex-login prepare-login
+native:login
+engine:codex-login save test' ] || { printf 'Unexpected Codex output: %s\n' "$output" >&2; exit 1; }
+output=$("$aic" login test)
+[ "$output" = 'engine:claude-login checkpoint
+native-claude:auth login --claudeai
+engine:claude-login save test' ] || { printf 'Unexpected Claude output: %s\n' "$output" >&2; exit 1; }
+PATH="$root/mount/c/npm:/usr/bin:/bin"; export PATH
+if "$aic" codex login test > "$root/output" 2> "$root/error"; then
+    echo 'Windows-only Codex unexpectedly succeeded' >&2
+    exit 1
+fi
+if [ -s "$root/output" ] || ! grep -q 'codex not found.*inside WSL on Windows' "$root/error"; then
+    echo 'Windows-only Codex did not fail with installation guidance' >&2
+    exit 1
+fi
+if "$aic" login test > "$root/output" 2> "$root/error"; then
+    echo 'Windows-only Claude unexpectedly succeeded' >&2
+    exit 1
+fi
+if [ -s "$root/output" ] || ! grep -q 'claude not found.*inside WSL on Windows' "$root/error"; then
+    echo 'Windows-only Claude did not fail with installation guidance' >&2
+    exit 1
+fi
+printf 'scripts/test-aic: 4 login checks passed\n'

@@ -33,6 +33,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build x86_64 packages
         run: docker run --rm -v "$PWD":/src -w /src swift:6.2-bookworm ./scripts/package-linux 0.0.0
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-deb-amd64
+          path: dist/ai-control_0.0.0_amd64.deb
+          if-no-files-found: error
       - name: Install Debian packages and smoke test
         run: |
           for image in debian:bookworm-slim debian:trixie-slim; do
@@ -62,6 +67,30 @@ jobs:
             aic status --json | grep -q '\''"version":1'\''
             aic-tui --help
           '
+
+  # Install the published Debian artifact in Ubuntu under WSL 2.
+  wsl:
+    needs: packages
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ai-control-deb-amd64
+          path: dist
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: '2'
+      - name: Install package and exercise WSL launcher
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          apt-get update -qq
+          apt-get install -y -qq ./dist/ai-control_0.0.0_amd64.deb
+          aic status --json | grep -q '"version"'
+          aic-tui --help
+          AIC_UNDER_TEST=/usr/bin/aic sh ./scripts/test-aic
 
   # The terminal UI: formatting, lints and tests.
   tui:

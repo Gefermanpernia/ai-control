@@ -115,6 +115,35 @@ struct CodexLoginTests {
         #expect(fixture.messages.contains("Saved work; auth.json cleared for codex login."))
     }
 
+    @Test("A Windows-only Codex error gives installation guidance after restoring the previous login")
+    func missingNativeCodexRestoresAndExplains() async throws {
+        let fixture = try CodexFixture()
+        defer { fixture.cleanup() }
+        let previous = try codexAuth(account: "acct-a", email: "a@example.com")
+        fixture.live = previous
+        #expect(fixture.run("save", "work") == 0)
+        let adapter = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
+            fetch: { _ in Data() }, signIn: { throw NativeCodexRequired.missing }, renew: { $0 }
+        ))
+        #expect(await adapter.add(alias: "home") == .blocked(
+            "Sign-in did not finish; your previous Codex login is back. Codex CLI not found. Install it on this system (inside WSL on Windows); a Windows-side codex cannot use these logins."
+        ))
+        #expect(fixture.live == previous)
+    }
+
+    @Test("A Windows-only Codex error gives installation guidance without a previous login")
+    func missingNativeCodexWithoutPrevious() async throws {
+        let fixture = try CodexFixture()
+        defer { fixture.cleanup() }
+        let adapter = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
+            fetch: { _ in Data() }, signIn: { throw NativeCodexRequired.missing }, renew: { $0 }
+        ))
+        #expect(await adapter.add(alias: "home") == .blocked(
+            "Sign-in did not finish. Codex CLI not found. Install it on this system (inside WSL on Windows); a Windows-side codex cannot use these logins."
+        ))
+        #expect(fixture.live == nil)
+    }
+
     @Test("Rename moves a saved Codex login")
     func renameMovesLogin() throws {
         let fixture = try CodexFixture()
@@ -162,14 +191,17 @@ private final class CodexFixture {
 
     var mode: Int? { (try? FileManager.default.attributesOfItem(atPath: authPath))?[.posixPermissions] as? Int }
 
-    func run(_ arguments: String...) -> Int32 {
-        let system = CodexLoginSystem(
+    var system: CodexLoginSystem {
+        CodexLoginSystem(
             authPath: authPath, store: store,
             acquireLock: { [directory] in try ManagerFileLock.acquire(directory: directory.appendingPathComponent("lock").path) },
             keyringHoldsLogin: { self.keyringHoldsLogin },
             beforeReplace: { self.beforeReplace?() }
         )
-        return runCodexLogins(arguments: ["codex-login"] + arguments, system: system, output: { self.messages.append($0) })
+    }
+
+    func run(_ arguments: String...) -> Int32 {
+        runCodexLogins(arguments: ["codex-login"] + arguments, system: system, output: { self.messages.append($0) })
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: directory) }

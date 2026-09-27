@@ -372,7 +372,11 @@ actor CodexLoginAppAdapter {
         } catch { return .blocked("Blocked: saved Codex logins are unavailable.") }
         do { try services.signIn() } catch {
             if let previous { try? manager.use(previous) }
-            return .blocked(previous == nil ? "Sign-in did not finish." : "Sign-in did not finish; your previous Codex login is back.")
+            let message = previous == nil ? "Sign-in did not finish." : "Sign-in did not finish; your previous Codex login is back."
+            if let nativeError = error as? NativeCodexRequired {
+                return .blocked(message + " " + nativeError.localizedDescription)
+            }
+            return .blocked(message)
         }
         do {
             let identity = try manager.save(alias)

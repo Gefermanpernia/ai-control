@@ -1,0 +1,2 @@
+# Shell scripts must keep LF endings on Windows checkouts (WSL CI).
+scripts/* text eol=lf
