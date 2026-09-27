@@ -95,7 +95,7 @@ jobs:
         run: |
           set -eu
           apt-get update -qq
-          apt-get install -y -qq ./dist/ai-control_0.0.0_amd64.deb
+          apt-get install -y -qq ./dist/ai-control_0.0.0_amd64.deb tmux
           aic status --json | grep -q '"version"'
           aic-tui --help
           AIC_UNDER_TEST=/usr/bin/aic sh ./scripts/test-aic
@@ -121,6 +121,12 @@ jobs:
           fi
           grep -q 'inside WSL on Windows' "$work/error"
           [ ! -e "$marker" ]
+          # End to end: the installed terminal UI and engine refuse a codex on a Windows drive mounted
+          # outside /mnt, so only the mount table can identify it.
+          mkdir -p /win/c
+          mount --bind /mnt/c /win/c
+          grep ' /win/c ' /proc/self/mounts
+          sh ./scripts/e2e-tui /win/c/Users/Public/aic-e2e
 
   # The terminal UI: formatting, lints and tests.
   tui:

@@ -1,0 +1,57 @@
+#!/bin/sh
+# End-to-end WSL check: the installed engine and terminal UI refuse a codex that lives on a Windows drive.
+#   scripts/e2e-tui <directory on a Windows drive>
+# Saved logins (XDG_DATA_HOME), the Codex login (CODEX_HOME) and PATH point into a throwaway directory, so
+# no real login is written. The engine takes the home directory from the user database, not $HOME, which
+# is why HOME alone would not isolate it. Needs tmux and the installed package; AIC_ENGINE_UNDER_TEST
+# overrides the engine path.
+set -eu
+windows_dir=$1
+engine=${AIC_ENGINE_UNDER_TEST:-/usr/lib/ai-control/AIControl}
+work=$(mktemp -d)
+marker=$work/windows-codex-ran
+pane=$work/pane
+tmux_cmd() { tmux -L aic-e2e "$@"; }
+cleanup() {
+    tmux_cmd kill-server 2>/dev/null || true
+    rm -f "$windows_dir/codex"
+    rm -r "$work"
+}
+trap cleanup EXIT
+fail() { printf 'e2e-tui: %s\n' "$1" >&2; [ ! -f "$pane" ] || cat "$pane" >&2; exit 1; }
+
+mkdir -p "$work/bin" "$windows_dir"
+printf '#!/bin/sh\ntouch "%s"\n' "$marker" > "$windows_dir/codex"
+chmod +x "$windows_dir/codex"
+ln -s "$windows_dir/codex" "$work/bin/codex"
+XDG_DATA_HOME=$work/share CODEX_HOME=$work/codex PATH=$work/bin:/usr/bin:/bin
+export XDG_DATA_HOME CODEX_HOME PATH
+
+# The engine on its own.
+if "$engine" codex-login add e2e > "$work/engine" 2>&1; then fail 'engine accepted a Windows-side codex'; fi
+grep -q 'inside WSL on Windows' "$work/engine" || { cat "$work/engine" >&2; fail 'engine gave no guidance'; }
+
+# The terminal UI driving the same engine: Tab to Codex, a to add, alias, Enter.
+wait_for() {
+    tries=0
+    while :; do
+        tmux_cmd capture-pane -p -t e2e > "$pane" 2>/dev/null || :
+        if grep -q "$1" "$pane" && grep -q 'Codex' "$pane"; then return 0; fi
+        tries=$((tries + 1))
+        [ "$tries" -lt 30 ] || fail "timed out waiting for: $1"
+        sleep 1
+    done
+}
+tmux_cmd new-session -d -s e2e -x 250 -y 30 "AIC_ENGINE=$engine aic-tui"
+wait_for 'Claude'
+tmux_cmd send-keys -t e2e Tab a e2e Enter
+wait_for 'inside WSL on Windows'
+tmux_cmd send-keys -t e2e q
+tries=0
+while tmux_cmd has-session -t e2e 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 10 ] || fail 'terminal UI did not quit'
+    sleep 1
+done
+[ ! -e "$marker" ] || fail 'the Windows-side codex ran'
+printf 'scripts/e2e-tui: engine and terminal UI refused %s/codex\n' "$windows_dir"

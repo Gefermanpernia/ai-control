@@ -52,4 +52,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Shellcheck
-        run: shellcheck scripts/aic scripts/package-app scripts/test
+        run: shellcheck scripts/aic scripts/package-app scripts/test scripts/test-aic scripts/e2e-tui
