@@ -19,6 +19,21 @@ pub fn engine_path(exe: &Path, env: &HashMap<String, String>) -> PathBuf {
     PathBuf::from("AIControl")
 }
 
+/// A missing engine is the usual setup problem (copied or source-built binaries), so name it and the fix.
+fn run_error(path: &Path, error: io::Error) -> String {
+    if error.kind() == io::ErrorKind::NotFound {
+        format!(
+            "AI Control engine not found ({}). Install the ai-control package, or set AIC_ENGINE to the AIControl binary.",
+            path.display()
+        )
+    } else {
+        format!(
+            "Could not run the AI Control engine ({}): {error}",
+            path.display()
+        )
+    }
+}
+
 pub fn message(stdout: &[u8], stderr: &[u8]) -> String {
     [stdout, stderr]
         .iter()
@@ -113,7 +128,7 @@ impl<R: Runner> SubprocessEngine<R> {
         let out = self
             .runner
             .run(&self.path, &args, true)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| run_error(&self.path, e))?;
         Ok(Outcome {
             success: out.status.success(),
             message: message(&out.stdout, &out.stderr),
@@ -129,7 +144,7 @@ impl<R: Runner> Engine for SubprocessEngine<R> {
         let out = self
             .runner
             .run(&self.path, &args, false)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| run_error(&self.path, e))?;
         if !out.status.success() {
             return Err(message(&out.stdout, &out.stderr));
         }
@@ -149,7 +164,7 @@ impl<R: Runner> Engine for SubprocessEngine<R> {
         let out = self
             .runner
             .run(&self.path, &args, false)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| run_error(&self.path, e))?;
         Ok(Outcome {
             success: out.status.success(),
             message: message(&out.stdout, &out.stderr),

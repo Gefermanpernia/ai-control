@@ -82,9 +82,11 @@ fn rows(app: &App, provider: usize, now: OffsetDateTime) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if provider == 0 {
         if !app.status.claude.available {
-            return vec![Line::from(
-                "Unavailable: Claude login switching is off or unreadable",
-            )];
+            return vec![Line::from(if app.status_failed {
+                "Login status could not be read; see the message below"
+            } else {
+                "Unavailable: Claude login switching is off or unreadable"
+            })];
         }
         for (i, l) in app.status.claude.logins.iter().enumerate() {
             let mark = if app.status.claude.selected.as_deref() == Some(&l.name) {
@@ -114,9 +116,11 @@ fn rows(app: &App, provider: usize, now: OffsetDateTime) -> Vec<Line<'static>> {
         }
     } else {
         if !app.status.codex.available {
-            return vec![Line::from(
-                "Unavailable: Codex login switching is off or unreadable",
-            )];
+            return vec![Line::from(if app.status_failed {
+                "Login status could not be read; see the message below"
+            } else {
+                "Unavailable: Codex login switching is off or unreadable"
+            })];
         }
         for (i, l) in app.status.codex.logins.iter().enumerate() {
             let mark = if app.status.codex.in_use.as_deref() == Some(&l.name) {
@@ -384,6 +388,16 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("codex-11")));
     }
     #[test]
+    fn failed_status_read_is_not_reported_as_switching_off() {
+        let s = r#"{"version":1,"claude":{"available":false,"selected":null,"logins":[]},"codex":{"available":false,"inUse":null,"logins":[]}}"#;
+        let mut app = App::new(parse(s).unwrap());
+        app.status_error("AI Control engine not found (AIControl).");
+        let buffer = rendered(&app, 120, 20, OffsetDateTime::UNIX_EPOCH);
+        let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
+        assert!(image.contains("Login status could not be read"), "{image}");
+        assert!(!image.contains("switching is off"), "{image}");
+    }
+    #[test]
     fn snapshot_and_narrow() {
         let s = r#"{"version":1,"claude":{"available":true,"selected":"one","logins":[{"name":"one","needsLogin":false,"usage":{"windows":[{"label":"5h","usedPercent":25,"resetsAt":null}],"resetsAvailable":null,"fetchedAt":"2026-09-26T00:00:00Z"},"usageError":null}]},"codex":{"available":false,"inUse":null,"logins":[]}}"#;
         let app = App::new(parse(s).unwrap());
@@ -489,7 +503,7 @@ mod tests {
         assert!(!text.contains("Unavailable:"));
         app.status_error("Engine failed");
         let (text, _) = screen(&app);
-        assert!(text.contains("Unavailable:"));
+        assert!(text.contains("Login status could not be read"));
     }
     #[test]
     fn footer_distinguishes_plain_status_from_usage_loading() {

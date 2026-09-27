@@ -48,6 +48,8 @@ pub struct App {
     pub action_success: Option<bool>,
     pub loading: Option<Loading>,
     pub status_loaded: bool,
+    /// The last status read failed, so an unavailable provider may only mean the status is unknown.
+    pub status_failed: bool,
     pub updated: Option<time::OffsetDateTime>,
 }
 impl App {
@@ -64,6 +66,7 @@ impl App {
             action_success: None,
             loading: None,
             status_loaded: true,
+            status_failed: false,
             updated: None,
         }
     }
@@ -114,6 +117,7 @@ impl App {
     pub fn status_error(&mut self, error: &str) {
         self.loading = None;
         self.status_loaded = true;
+        self.status_failed = true;
         self.message = error.into();
         self.action_success = Some(false);
     }
@@ -164,6 +168,7 @@ impl App {
         );
         self.status = status;
         self.status_loaded = true;
+        self.status_failed = false;
         self.loading = None;
         self.updated = Some(time::OffsetDateTime::now_utc());
     }

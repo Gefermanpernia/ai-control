@@ -824,8 +824,8 @@ private func list(backend: any ClaudeLoginBackend, output: (String) -> Void) thr
 }
 
 #if !os(macOS)
-/// The menu-bar app is macOS only; on Linux, `aic` without arguments opens the terminal interface.
+/// The menu-bar app is macOS only; on Linux this binary is the engine behind `aic` and `aic-tui`.
 public func runAIControl() {
-    print("The menu-bar app runs on macOS. Use aic-tui for the terminal interface.")
+    print("AIControl is the engine that aic and aic-tui run; it has no interface of its own. Run aic to open the terminal interface.")
 }
 #endif
