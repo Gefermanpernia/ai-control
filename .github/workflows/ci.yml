@@ -28,23 +28,40 @@ jobs:
 
   # Install the actual packages in clean Debian and Arch containers.
   packages:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            deb_arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            deb_arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-      - name: Build x86_64 packages
+      - name: Build ${{ matrix.arch }} packages
         run: docker run --rm -v "$PWD":/src -w /src swift:6.2-bookworm ./scripts/package-linux 0.0.0
       - uses: actions/upload-artifact@v7
         with:
-          name: ai-control-deb-amd64
-          path: dist/ai-control_0.0.0_amd64.deb
+          name: ai-control-deb-${{ matrix.deb_arch }}
+          path: dist/ai-control_0.0.0_${{ matrix.deb_arch }}.deb
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/ai-control-0.0.0-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
       - name: Install Debian packages and smoke test
+        env:
+          DEB: ai-control_0.0.0_${{ matrix.deb_arch }}.deb
         run: |
-          for image in debian:bookworm-slim debian:trixie-slim; do
-            docker run --rm -v "$PWD/dist":/dist:ro "$image" sh -ec '
+          dpkg-deb -f "dist/$DEB" Depends
+          for image in debian:bookworm-slim debian:trixie-slim ubuntu:22.04 ubuntu:24.04; do
+            docker run --rm -e DEB -v "$PWD/dist":/dist:ro "$image" sh -ec '
               apt-get update -qq
-              apt-get install -y -qq /dist/ai-control_0.0.0_amd64.deb
-              export HOME=$(mktemp -d)
+              apt-get install -y -qq "/dist/$DEB"
               aic status --json | grep -q '\''"version":1'\''
               aic-tui --help
               # First Codex use on a clean system reaches sign-in (no codex installed here) instead of
@@ -54,21 +71,33 @@ jobs:
               grep -q "Sign-in did not finish" /tmp/add
             '
           done
+
+  # The release PKGBUILD with real checksums of both tarballs, installed on Arch (x86_64 image only).
+  arch:
+    needs: packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - name: Generate PKGBUILD
+        run: ./scripts/package-linux --pkgbuild 0.0.0
       - name: Install Arch package and smoke test
         run: |
-          docker run --rm -v "$PWD/dist":/dist:ro -v "$PWD/packaging/arch":/template:ro archlinux:latest sh -ec '
+          docker run --rm -v "$PWD/dist":/dist:ro archlinux:latest sh -ec '
             pacman -Syu --noconfirm base-devel curl
             mkdir /build
-            cp /dist/ai-control-0.0.0-linux-x86_64.tar.gz /build/
-            # The source URL is local for CI; the release template keeps its public URL.
-            cp /template/PKGBUILD.in /build/PKGBUILD
-            sed -i "s/@VERSION@/0.0.0/g; s|source_x86_64=.*|source_x86_64=(\"file:///build/ai-control-0.0.0-linux-x86_64.tar.gz\")|; s/@SHA256_X86_64@/SKIP/g; s/@SHA256_AARCH64@/SKIP/g" /build/PKGBUILD
+            cp /dist/ai-control-0.0.0-linux-x86_64.tar.gz /dist/PKGBUILD /build/
+            # Only the download URL is local; makepkg still verifies the generated checksum.
+            sed -i "s|^source_x86_64=.*|source_x86_64=(\"file:///build/ai-control-0.0.0-linux-x86_64.tar.gz\")|" /build/PKGBUILD
+            if grep -q SKIP /build/PKGBUILD; then echo "PKGBUILD skips checksums" >&2; exit 1; fi
             useradd -m builder
             chown -R builder:builder /build
             su builder -s /bin/sh -c "cd /build && makepkg --noconfirm"
-            ls /build/*.pkg.tar.zst
             pacman -U --noconfirm /build/ai-control-0.0.0-1-x86_64.pkg.tar.zst
-            export HOME=$(mktemp -d)
             aic status --json | grep -q '\''"version":1'\''
             aic-tui --help
             export XDG_DATA_HOME=$(mktemp -d)/share

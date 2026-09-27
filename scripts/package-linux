@@ -61,6 +61,24 @@ ln -sfn ../lib/ai-control/aic "$stage/usr/bin/aic"
 ln -sfn ../lib/ai-control/aic-tui "$stage/usr/bin/aic-tui"
 install -m 644 LICENSE "$stage/usr/share/licenses/ai-control/LICENSE"
 install -m 644 LICENSE "$stage/usr/share/doc/ai-control/copyright"
+# Depends comes from the built binaries, so it cannot drift from the build image. One exception: the
+# engine links libcurl's WebSocket functions (7.86+) through FoundationNetworking but never calls them,
+# and they bind lazily, so curl 7.81 (Ubuntu 22.04) works; libcurl4t64 is its Debian 13 / Ubuntu 24.04 name.
+if ! command -v dpkg-shlibdeps >/dev/null 2>&1; then
+    apt-get update -qq
+    apt-get install -y -qq dpkg-dev
+fi
+shlibs=$(mktemp -d)
+mkdir "$shlibs/debian"
+printf 'Source: ai-control\n' > "$shlibs/debian/control"
+depends=$(cd "$shlibs" && dpkg-shlibdeps -O "$OLDPWD/$stage/usr/lib/ai-control/AIControl" \
+    "$OLDPWD/$stage/usr/lib/ai-control/aic-tui" | sed -e 's/^shlibs:Depends=//' \
+    -e 's/libcurl4 ([^)]*)/libcurl4 (>= 7.81.0) | libcurl4t64/')
+rm -r "$shlibs"
+case "$depends" in
+    *libc6*) ;;
+    *) echo "Unexpected dependencies: $depends" >&2; exit 1 ;;
+esac
 cat > "$stage/DEBIAN/control" <<EOF
 Package: ai-control
 Version: $version
@@ -68,7 +86,7 @@ Section: utils
 Priority: optional
 Architecture: $deb_arch
 Maintainer: Geferman Pernia <33972248+Gefermanpernia@users.noreply.github.com>
-Depends: libc6 (>= 2.35), libcurl4 | libcurl4t64, libstdc++6, libgcc-s1
+Depends: $depends
 Homepage: https://github.com/Gefermanpernia/ai-control
 Description: Terminal login switcher for Claude Code and Codex CLI
  AI Control includes a command-line launcher and terminal user interface.
