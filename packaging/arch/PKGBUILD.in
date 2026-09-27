@@ -7,6 +7,8 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/Gefermanpernia/ai-control'
 license=('MIT')
 depends=('curl' 'gcc-libs' 'glibc')
+# The binaries are already stripped; a debug package would be empty.
+options=('!debug')
 source_x86_64=("$url/releases/download/v$pkgver/ai-control-$pkgver-linux-x86_64.tar.gz")
 source_aarch64=("$url/releases/download/v$pkgver/ai-control-$pkgver-linux-aarch64.tar.gz")
 sha256sums_x86_64=('@SHA256_X86_64@')

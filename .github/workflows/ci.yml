@@ -56,7 +56,8 @@ jobs:
             useradd -m builder
             chown -R builder:builder /build
             su builder -s /bin/sh -c "cd /build && makepkg --noconfirm"
-            pacman -U --noconfirm /build/ai-control-*.pkg.tar.zst
+            ls /build/*.pkg.tar.zst
+            pacman -U --noconfirm /build/ai-control-0.0.0-1-x86_64.pkg.tar.zst
             export HOME=$(mktemp -d)
             aic status --json | grep -q '\''"version":1'\''
             aic-tui --help
