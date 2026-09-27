@@ -100,14 +100,32 @@ struct LoginStatus: Codable {
         }
     }
 
+    struct Monitor: Codable {
+        let id: String
+        let name: String
+        let usage: Usage?
+        let error: String?
+
+        enum CodingKeys: String, CodingKey { case id, name, usage, error }
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(name, forKey: .name)
+            try container.encode(usage, forKey: .usage)
+            try container.encode(error, forKey: .error)
+        }
+    }
+
     let version: Int
     let claude: Claude
     let codex: Codex
+    let monitors: [Monitor]
 
-    init(claude: Claude, codex: Codex) {
+    init(claude: Claude, codex: Codex, monitors: [Monitor]) {
         version = 1
         self.claude = claude
         self.codex = codex
+        self.monitors = monitors
     }
 }
 
@@ -125,7 +143,8 @@ struct InstalledCLIs {
 }
 
 func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, includeUsage: Bool,
-                 installed: InstalledCLIs = .init(claude: true, codex: true)) async -> LoginStatus {
+                 installed: InstalledCLIs = .init(claude: true, codex: true),
+                 monitors: UsageMonitors = .live) async -> LoginStatus {
     let claudeList = await claude.list()
     let codexList = await codex.list()
     let claudeUsage = includeUsage ? await claude.usage() : [:]
@@ -150,7 +169,7 @@ func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, inc
     } else {
         codexState = .init(available: false, inUse: nil, logins: [], installed: installed.codex)
     }
-    return .init(claude: claudeState, codex: codexState)
+    return .init(claude: claudeState, codex: codexState, monitors: await monitors.monitors(includeUsage: includeUsage))
 }
 
 private func statusUsage(_ result: LoginUsageResult?) -> (LoginStatus.Usage?, String?) {

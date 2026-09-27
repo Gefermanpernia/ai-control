@@ -56,6 +56,11 @@ private final class StatusCodexFixture: @unchecked Sendable {
 }
 
 struct LoginStatusTests {
+    private var noMonitors: UsageMonitors {
+        .init(environment: [:], readFile: { _ in throw StatusFailure() },
+              fetch: { _ in Issue.record("unexpected monitor fetch"); throw StatusFailure() }, now: Date.init)
+    }
+
     private func snapshot(_ account: String) throws -> ClaudeLoginSnapshot {
         try .capture(secureRoot: #"{"claudeAiOauth":{"accessToken":"tok","refreshToken":"r","expiresAt":4102444800000}}"#,
                      configurationRoot: #"{"oauthAccount":{"accountUuid":"\#(account)"}}"#)
@@ -93,8 +98,9 @@ struct LoginStatusTests {
         let (claude, codex) = adapters(claude: backend, codex: fixture,
                                         claudeFetch: { _ in Issue.record("unexpected Claude fetch"); throw StatusFailure() },
                                         codexFetch: { _ in Issue.record("unexpected Codex fetch"); throw StatusFailure() })
-        let root = try document(await loginStatus(claude: claude, codex: codex, includeUsage: false))
-        #expect(root.keys.sorted() == ["claude", "codex", "version"])
+        let root = try document(await loginStatus(claude: claude, codex: codex, includeUsage: false, monitors: noMonitors))
+        #expect(root.keys.sorted() == ["claude", "codex", "monitors", "version"])
+        #expect((root["monitors"] as? [Any])?.isEmpty == true)
         #expect(root["version"] as? Int == 1)
         let c = try #require(root["claude"] as? [String: Any])
         #expect(c.keys.sorted() == ["available", "installed", "logins", "selected"])
@@ -112,6 +118,24 @@ struct LoginStatusTests {
         #expect(xa["usage"] is NSNull && xa["usageError"] is NSNull)
     }
 
+    @Test("Monitor JSON has explicit nulls, never exposes the key, and avoids fetch without opt-in")
+    func monitorDocument() async throws {
+        let secret = "monitor-secret-not-for-output"
+        let monitor = UsageMonitors(environment: ["OPENCODE_AUTH_CONTENT":
+            #"{"opencode-go":{"type":"api","key":"\#(secret)"}}"#],
+            readFile: { _ in Issue.record("unexpected file read"); throw StatusFailure() },
+            fetch: { _ in Issue.record("unexpected network fetch"); throw StatusFailure() }, now: Date.init)
+        let snapshot = await loginStatus(claude: .init(), codex: .init(), includeUsage: false, monitors: monitor)
+        let root = try document(snapshot)
+        let value = try #require((root["monitors"] as? [[String: Any]])?.first)
+        #expect(value.keys.sorted() == ["error", "id", "name", "usage"])
+        #expect(value["id"] as? String == "opencode-go")
+        #expect(value["name"] as? String == "OpenCode Go")
+        #expect(value["usage"] is NSNull && value["error"] is NSNull)
+        let encoder = JSONEncoder()
+        #expect(!String(decoding: try encoder.encode(snapshot), as: UTF8.self).contains(secret))
+    }
+
     @Test("Status usage includes ISO UTC dates and per-login failures")
     func statusWithUsage() async throws {
         let backend = StatusClaudeBackend(.init(snapshots: ["work": try snapshot("a")]))
@@ -120,7 +144,7 @@ struct LoginStatusTests {
         let (claude, codex) = adapters(claude: backend, codex: fixture,
             claudeFetch: { _ in Data(#"{"five_hour":{"utilization":12,"resets_at":"2026-09-26T19:39:59Z"}}"#.utf8) },
             codexFetch: { _ in throw StatusFailure() })
-        let root = try document(await loginStatus(claude: claude, codex: codex, includeUsage: true))
+        let root = try document(await loginStatus(claude: claude, codex: codex, includeUsage: true, monitors: noMonitors))
         let ca = try #require(((root["claude"] as? [String: Any])?["logins"] as? [[String: Any]])?.first)
         let usage = try #require(ca["usage"] as? [String: Any])
         #expect(usage.keys.sorted() == ["fetchedAt", "resetsAvailable", "windows"])
@@ -137,14 +161,14 @@ struct LoginStatusTests {
     @Test("Status reports which CLIs are installed so the UI can hide the others")
     func statusReportsInstalledCLIs() async throws {
         let root = try document(await loginStatus(claude: .init(), codex: .init(), includeUsage: false,
-                                                  installed: .init(claude: true, codex: false)))
+                                                  installed: .init(claude: true, codex: false), monitors: noMonitors))
         #expect((root["claude"] as? [String: Any])?["installed"] as? Bool == true)
         #expect((root["codex"] as? [String: Any])?["installed"] as? Bool == false)
     }
 
     @Test("Unavailable and unreadable lists stay empty and unavailable")
     func unavailableLists() async throws {
-        let unavailable = try document(await loginStatus(claude: .init(), codex: .init(), includeUsage: true))
+        let unavailable = try document(await loginStatus(claude: .init(), codex: .init(), includeUsage: true, monitors: noMonitors))
         for provider in ["claude", "codex"] {
             let value = try #require(unavailable[provider] as? [String: Any])
             #expect(value["available"] as? Bool == false)
@@ -156,7 +180,7 @@ struct LoginStatusTests {
         defer { fixture.cleanup() }
         fixture.store.data = Data("broken".utf8)
         let unreadable = try document(await loginStatus(claude: .init(makeBackend: { backend }),
-            codex: .init(makeSystem: { fixture.system }), includeUsage: false))
+            codex: .init(makeSystem: { fixture.system }), includeUsage: false, monitors: noMonitors))
         for provider in ["claude", "codex"] {
             let value = try #require(unreadable[provider] as? [String: Any])
             #expect(value["available"] as? Bool == false)
