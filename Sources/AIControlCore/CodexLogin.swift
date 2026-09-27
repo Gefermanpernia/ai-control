@@ -1,5 +1,12 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 
 struct CodexLoginIdentity: Equatable, Sendable {
     let accountID: String
@@ -75,14 +82,23 @@ struct CodexLoginSystem {
     var beforeReplace: () -> Void = {}
 
     static var current: Self {
-        let home = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
+        let environment = ProcessInfo.processInfo.environment
+        let home = environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
+        let data = ClaudeLiveSystem.dataDirectory(home: NSHomeDirectory(), environment: environment)
+        #if os(macOS)
+        let store: any ClaudeLoginDataStore = SecurityToolKeychainItem(service: "AIControl-codex-logins.v1", account: String(geteuid()))
+        let keyringHoldsLogin = {
+            (try? SecurityToolKeychainItem.runSecurity(["find-generic-password", "-s", "Codex Auth"], nil))?.status == 0
+        }
+        #else
+        let store: any ClaudeLoginDataStore = ProtectedFileStore(path: data + "/codex-logins.json")
+        // Codex on Linux defaults to auth.json; a Secret Service login is not detected here.
+        let keyringHoldsLogin = { false }
+        #endif
         return .init(
-            authPath: home + "/auth.json",
-            store: SecurityToolKeychainItem(service: "AIControl-codex-logins.v1", account: String(geteuid())),
-            acquireLock: { try ManagerFileLock.acquire(directory: NSHomeDirectory() + "/Library/Application Support/AIControl/codex") },
-            keyringHoldsLogin: {
-                (try? SecurityToolKeychainItem.runSecurity(["find-generic-password", "-s", "Codex Auth"], nil))?.status == 0
-            }
+            authPath: home + "/auth.json", store: store,
+            acquireLock: { try ManagerFileLock.acquire(directory: data + "/codex") },
+            keyringHoldsLogin: keyringHoldsLogin
         )
     }
 }
@@ -220,7 +236,7 @@ extension CodexLoginSystem {
 
 func runCodexLogins(arguments: [String], system: CodexLoginSystem = .current, output: (String) -> Void) -> Int32 {
     let usage = "Usage: AIControl codex-login save <alias> | list | use <alias> | rename <alias> <new-alias>"
-    let valid = { (alias: String) in alias.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil }
+    let valid = { (alias: String) in alias.range(of: #"\A[a-z][a-z0-9_-]{0,31}\z"#, options: .regularExpression) != nil }
     let manager = CodexLoginManager(system: system)
     let command = Array(arguments.dropFirst())
     do {

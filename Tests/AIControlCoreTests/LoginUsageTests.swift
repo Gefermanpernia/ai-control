@@ -70,7 +70,7 @@ struct ClaudeIsolatedRenewalTests {
         let items = IsolatedItems()
         var seen: (arguments: [String], environment: [String: String], configuration: String?)?
         let renewal = ClaudeIsolatedRenewal(
-            claudeExecutable: "/fake/claude", keychainAccount: "me", item: items.item,
+            claudeExecutable: "/fake/claude", keychainAccount: "me", item: { service, _ in items.item(service) },
             run: { _, arguments, environment, directory in
                 seen = (arguments, environment, try? String(contentsOfFile: directory + "/.claude.json", encoding: .utf8))
                 let service = items.services.first!
@@ -97,7 +97,7 @@ struct ClaudeIsolatedRenewalTests {
     func failedRenewalCleansUp() throws {
         let items = IsolatedItems()
         let renewal = ClaudeIsolatedRenewal(
-            claudeExecutable: "/fake/claude", keychainAccount: "me", item: items.item, run: { _, _, _, _ in 1 }
+            claudeExecutable: "/fake/claude", keychainAccount: "me", item: { service, _ in items.item(service) }, run: { _, _, _, _ in 1 }
         )
         #expect(throws: ClaudeIsolatedRenewal.Error.claudeFailed) { try renewal.renew(try snapshot(access: "a1", refresh: "r1")) }
         #expect(items.data.isEmpty)
@@ -107,7 +107,7 @@ struct ClaudeIsolatedRenewalTests {
     func rotatedLoginSurvivesClaudeFailure() throws {
         let items = IsolatedItems()
         let renewal = ClaudeIsolatedRenewal(
-            claudeExecutable: "/fake/claude", keychainAccount: "me", item: items.item, run: { _, _, _, _ in
+            claudeExecutable: "/fake/claude", keychainAccount: "me", item: { service, _ in items.item(service) }, run: { _, _, _, _ in
                 items.data[items.services.first!] = Data(#"{"claudeAiOauth":{"accessToken":"a2","refreshToken":"r2","expiresAt":4102444800000}}"#.utf8)
                 return 1
             }

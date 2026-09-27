@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -49,3 +50,4 @@ public func renderScreenshots(to directory: String) -> Int32 {
         return 1
     }
 }
+#endif

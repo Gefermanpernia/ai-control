@@ -1,6 +1,14 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+/// Status codes keep their macOS name so shared error types read the same on every platform.
+typealias OSStatus = Int32
+#endif
 
 enum IsolatedKeychainError: Error, Equatable {
     case missing
@@ -13,6 +21,7 @@ enum IsolatedKeychainError: Error, Equatable {
     case operatingSystem(OSStatus)
 }
 
+#if os(macOS)
 struct KeychainNativeCalls {
     var copy: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
     var add: (CFDictionary) -> OSStatus
@@ -44,6 +53,8 @@ struct ManagerKeychainNativeCalls {
         }
     )
 }
+
+#endif
 
 protocol ClaudeLoginDataStore {
     func read() throws -> Data
@@ -243,7 +254,7 @@ struct ClaudeLoginEnvelopeCodec {
 
     private func validate(_ state: ClaudeLoginState) throws {
         guard state.snapshots.count <= Self.maxAliases,
-              state.snapshots.keys.allSatisfy({ $0.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil }),
+              state.snapshots.keys.allSatisfy({ $0.range(of: #"\A[a-z][a-z0-9_-]{0,31}\z"#, options: .regularExpression) != nil }),
               state.activeAlias.map({ state.snapshots[$0] != nil }) ?? true,
               Set(state.snapshots.values.map(\.identity)).count == state.snapshots.count else {
             throw ClaudeLoginEnvelopeError.invalid
@@ -386,6 +397,7 @@ struct ClaudeLoginCustody {
     }
 }
 
+#if os(macOS)
 enum ManagerKeychainPolicy {
     enum Error: Swift.Error, Equatable { case unapprovedBinary(OSStatus), accessCreation(OSStatus) }
 
@@ -577,6 +589,8 @@ struct IsolatedKeychainAdapter: ClaudeLoginDataStore {
     }
 }
 
+#endif
+
 enum ProtectedConfigurationError: Error, Equatable {
     case tooLarge
     case tooDeep
@@ -682,7 +696,7 @@ struct ProtectedConfigurationFile {
         guard writeAll(output, to: temporaryDescriptor),
               fchown(temporaryDescriptor, initial.metadata.st_uid, initial.metadata.st_gid) == 0,
               fchmod(temporaryDescriptor, initial.metadata.st_mode & 0o7777) == 0,
-              fcopyfile(initial.descriptor, temporaryDescriptor, nil, copyfile_flags_t(COPYFILE_ACL)) == 0,
+              copyAccessControlList(from: initial.descriptor, to: temporaryDescriptor),
               fsync(temporaryDescriptor) == 0 else {
             throw ProtectedConfigurationError.writeFailed
         }
@@ -787,6 +801,15 @@ struct ProtectedConfigurationFile {
         lhs.st_uid == rhs.st_uid && lhs.st_gid == rhs.st_gid &&
             (lhs.st_mode & 0o7777) == (rhs.st_mode & 0o7777)
     }
+}
+
+/// Copies the file's access control list; Linux has no ACLs to copy here, so ownership and mode suffice.
+private func copyAccessControlList(from source: Int32, to destination: Int32) -> Bool {
+    #if os(macOS)
+    return fcopyfile(source, destination, nil, copyfile_flags_t(COPYFILE_ACL)) == 0
+    #else
+    return true
+    #endif
 }
 
 enum ManagerFileLockError: Error, Equatable {
@@ -899,7 +922,7 @@ enum ClaudeRoutingValidator {
         }
         guard evidence.conflicts.isEmpty else { throw ClaudeRoutingError.conflictingSource }
         let candidate = evidence.environmentUser ?? evidence.operatingSystemUser
-        let account = candidate?.range(of: #"^[a-zA-Z0-9._-]+$"#, options: .regularExpression) == nil
+        let account = candidate?.range(of: #"\A[a-zA-Z0-9._-]+\z"#, options: .regularExpression) == nil
             ? "claude-code-user" : candidate ?? "claude-code-user"
         return .init(
             service: "Claude Code-credentials",
@@ -946,6 +969,7 @@ struct ClaudeProcessRecord: Equatable, Sendable {
     }
 }
 
+#if os(macOS)
 struct ProcessNativeCalls {
     let listPIDs: (UnsafeMutableRawPointer?, Int32) -> Int32
     let processInfo: (pid_t, Int32, UInt64, UnsafeMutableRawPointer?, Int32) -> Int32
@@ -958,9 +982,14 @@ struct ProcessNativeCalls {
     )
 }
 
+#endif
+
 struct NativeProcessProbe {
     let snapshot: () throws -> [ClaudeProcessRecord]
+}
 
+#if os(macOS)
+extension NativeProcessProbe {
     static func system(
         processIDs: (() throws -> [pid_t])? = nil,
         calls: ProcessNativeCalls = .live
@@ -1032,6 +1061,8 @@ struct NativeProcessProbe {
         return path
     }
 }
+
+#endif
 
 enum ClaudeProcessPreflightError: Error, Equatable {
     case active

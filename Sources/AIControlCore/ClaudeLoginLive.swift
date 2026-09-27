@@ -1,7 +1,20 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Security)
 import Security
+#endif
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 
 /// Recognizes Claude Code builds whose credential-storage derivation matches the reviewed builds.
 ///
@@ -119,13 +132,18 @@ struct ClaudeLiveSystem {
         )
     }
 
-    /// Live switching is on for the installed app, and for development builds only when `aic` asks for it;
-    /// `AI_CONTROL_CLAUDE_LIVE=0` turns it off everywhere.
+    /// Live switching is on for the installed macOS app and on Linux; macOS development builds need `aic`
+    /// to ask for it. `AI_CONTROL_CLAUDE_LIVE=0` turns it off everywhere.
     static func isEnabled(environment: [String: String], bundlePath: String = Bundle.main.bundlePath) -> Bool {
         switch environment["AI_CONTROL_CLAUDE_LIVE"] {
         case "1": return true
         case "0": return false
-        default: return bundlePath.hasSuffix(".app")
+        default:
+            #if os(macOS)
+            return bundlePath.hasSuffix(".app")
+            #else
+            return true
+            #endif
         }
     }
 
@@ -138,7 +156,18 @@ struct ClaudeLiveSystem {
     var launcherPath: String { home + "/.local/bin/claude" }
     var versionsDirectory: String { home + "/.local/share/claude/versions" }
     var configurationPath: String { home + "/.claude.json" }
-    var managerDirectory: String { home + "/Library/Application Support/AIControl" }
+    var managerDirectory: String { Self.dataDirectory(home: home, environment: environment) }
+    /// Claude Code keeps its Linux login in this file; on macOS it uses the Keychain instead.
+    var credentialsPath: String { home + "/.claude/.credentials.json" }
+
+    /// Where AI Control keeps its lock and, on Linux, its saved logins.
+    static func dataDirectory(home: String, environment: [String: String]) -> String {
+        #if os(macOS)
+        return home + "/Library/Application Support/AIControl"
+        #else
+        return (environment["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.local/share") + "/ai-control"
+        #endif
+    }
 
     func routingEvidence() -> ClaudeRoutingEvidence {
         let executable = resolveExecutable(launcherPath).flatMap { $0.hasPrefix(versionsDirectory + "/") ? $0 : nil }
@@ -154,7 +183,10 @@ struct ClaudeLiveSystem {
                  "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX") {
             conflicts.insert(.alternateAuthentication)
         }
-        if fileExists(home + "/.claude/.credentials.json") { conflicts.insert(.plaintextFallback) }
+        #if os(macOS)
+        // On macOS a credentials file means Claude fell back from the Keychain; on Linux it is the only store.
+        if fileExists(credentialsPath) { conflicts.insert(.plaintextFallback) }
+        #endif
         if fileExists(home + "/.claude/.config.json") { conflicts.insert(.legacyStorage) }
         return .init(
             storageContractVerified: executable.map(storageContractMatches) ?? false,
@@ -164,12 +196,23 @@ struct ClaudeLiveSystem {
     }
 
     func makeBackend(managerExecutable: String) -> any ClaudeLoginBackend {
+        // Open sessions are allowed, so the process scan never decides anything; Linux has no scan at all.
+        #if os(macOS)
+        let probe = NativeProcessProbe.system()
+        #else
+        let probe = NativeProcessProbe(snapshot: { [] })
+        #endif
         let preflight = ClaudeProcessPreflight(
             expectedUID: geteuid(), trustedExecutablePath: resolveExecutable(launcherPath) ?? launcherPath,
-            probe: .system(), trustedExecutableDirectory: versionsDirectory, permitsOpenSessions: true
+            probe: probe, trustedExecutableDirectory: versionsDirectory, permitsOpenSessions: true
         )
-        let custody = { (guardMutation: @escaping () throws -> Void) in
-            ClaudeLoginCustody(store: try Self.managerStore(beforeMutation: guardMutation))
+        let savedLogins = managerDirectory + "/claude-logins.json"
+        let custody = { (guardMutation: @escaping () throws -> Void) -> ClaudeLoginCustody in
+            #if os(macOS)
+            return ClaudeLoginCustody(store: try Self.managerStore(beforeMutation: guardMutation))
+            #else
+            return ClaudeLoginCustody(store: ProtectedFileStore(path: savedLogins, beforeMutation: guardMutation))
+            #endif
         }
         return CommandScopedClaudeLoginBackend(
             acquireLock: { [managerDirectory] in try ManagerFileLock.acquire(directory: managerDirectory) },
@@ -185,6 +228,7 @@ struct ClaudeLiveSystem {
         )
     }
 
+    #if os(macOS)
     static func managerStore(beforeMutation: @escaping () throws -> Void) throws -> MigratingKeychainStore {
         let account = String(geteuid())
         let legacy = IsolatedKeychainAdapter(
@@ -196,8 +240,15 @@ struct ClaudeLiveSystem {
         )
     }
 
+    #endif
+
     static func resources(_ route: ClaudeStorageRoute) throws -> ClaudeLoginResourceIO {
+        #if os(macOS)
         let item = SecurityToolKeychainItem(service: route.service, account: route.account)
+        #else
+        let home = (route.configurationPath as NSString).deletingLastPathComponent
+        let item = ProtectedFileStore(path: home + "/.claude/.credentials.json")
+        #endif
         let file = ProtectedConfigurationFile(path: route.configurationPath)
         return .init(
             readRoots: {
@@ -223,14 +274,17 @@ struct ClaudeLiveSystem {
         try file.replace(expectedSource: expected, with: .init(changes: owned), guardedBy: guardMutation)
     }
 
+    #if os(macOS)
     private static func defaultKeychain() throws -> SecKeychain {
         var keychain: SecKeychain?
         let status = SecKeychainCopyDefault(&keychain)
         guard status == errSecSuccess, let keychain else { throw IsolatedKeychainError.operatingSystem(status) }
         return keychain
     }
+    #endif
 }
 
+#if os(macOS)
 /// Reads and writes a generic-password item through `/usr/bin/security`, exactly as Claude Code does.
 ///
 /// Using the same Apple tool leaves the item's access list and partitions untouched, so neither Claude Code
@@ -366,6 +420,8 @@ struct MigratingKeychainStore: ClaudeLoginDataStore {
     }
 }
 
+#endif
+
 /// Runs a program to completion with its output discarded; stops it after `timeout` seconds.
 func runProcess(
     _ executable: String, _ arguments: [String], environment: [String: String]? = nil,
@@ -410,7 +466,13 @@ extension ClaudeAppServices {
                 let account = try route().account
                 return try ClaudeIsolatedRenewal(
                     claudeExecutable: claude, keychainAccount: account,
-                    item: { SecurityToolKeychainItem(service: $0, account: account) },
+                    item: { service, directory in
+                        #if os(macOS)
+                        return SecurityToolKeychainItem(service: service, account: account)
+                        #else
+                        return ProtectedFileStore(path: directory + "/.credentials.json")
+                        #endif
+                    },
                     run: { try runProcess($0, $1, environment: $2, directory: $3, timeout: 120) }
                 ).renew(snapshot)
             },

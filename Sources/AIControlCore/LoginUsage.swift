@@ -1,5 +1,12 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Usage limits the provider reports for one saved login.
 struct LoginUsage: Equatable, Sendable {
@@ -109,7 +116,8 @@ struct ClaudeIsolatedRenewal {
 
     let claudeExecutable: String
     let keychainAccount: String
-    let item: (_ service: String) -> any IsolatedCredentialItem
+    /// The item Claude uses for the throwaway directory: a Keychain item on macOS, a file on Linux.
+    let item: (_ service: String, _ directory: String) -> any IsolatedCredentialItem
     let run: Runner
 
     func renew(_ snapshot: ClaudeLoginSnapshot) throws -> ClaudeLoginSnapshot {
@@ -121,7 +129,7 @@ struct ClaudeIsolatedRenewal {
         // Claude names the item for a custom configuration directory after the first 8 hex digits of its SHA-256.
         let digest = SHA256.hash(data: Data(directory.precomposedStringWithCanonicalMapping.utf8))
         let service = "Claude Code-credentials-" + digest.map { String(format: "%02x", $0) }.joined().prefix(8)
-        let credentials = item(service)
+        let credentials = item(service, directory)
         guard case .value(let login) = snapshot.claudeAiOauth else { throw Error.notALogin }
         var secureFields = ClaudeLoginOwnedFields.target(snapshot).secure
         secureFields["claudeAiOauth"] = .value(try ScopedJSON(login).replacing(["expiresAt": .value("0")]))

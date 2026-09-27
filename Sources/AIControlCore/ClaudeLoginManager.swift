@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 struct ClaudeLoginIdentity: Hashable, Sendable {
     let accountUUID: String
@@ -647,7 +650,7 @@ private enum ClaudeLoginCommand {
     }
 
     private static func valid(_ alias: String) -> Bool {
-        alias.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil
+        alias.range(of: #"\A[a-z][a-z0-9_-]{0,31}\z"#, options: .regularExpression) != nil
     }
 }
 
@@ -817,3 +820,10 @@ private func list(backend: any ClaudeLoginBackend, output: (String) -> Void) thr
     }
     return 0
 }
+
+#if !os(macOS)
+/// The menu-bar app is macOS only; on Linux, `aic` without arguments opens the terminal interface.
+public func runAIControl() {
+    print("The menu-bar app runs on macOS. Use aic-tui for the terminal interface.")
+}
+#endif

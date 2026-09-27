@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import Foundation
 import Testing
@@ -434,3 +435,4 @@ private final class CodexStoreMemory: ClaudeLoginDataStore {
 private final class FetchCounter: @unchecked Sendable {
     var count = 0
 }
+#endif

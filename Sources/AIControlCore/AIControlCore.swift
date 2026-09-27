@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -816,3 +817,4 @@ private extension View {
         font(.caption).foregroundStyle(.secondary).padding(8).fixedSize(horizontal: false, vertical: true)
     }
 }
+#endif
