@@ -19,7 +19,60 @@ elif [ -x "$here/AIControl" ]; then
 else
     binary="$here/../.build/debug/AIControl"       # source checkout
 fi
+# Test-only engine substitution keeps login smoke tests away from real credentials.
+if [ -n "${AIC_TEST_BINARY:-}" ]; then binary=$AIC_TEST_BINARY; fi
 export AI_CONTROL_CLAUDE_LIVE=1
+
+# Tests override the fallback root and mount table without requiring a real WSL drive.
+windows_mount_root=${AIC_TEST_WINDOWS_MOUNT_ROOT:-/mnt}
+# AIC_TEST_MOUNTS is a test-only path to a substitute /proc/self/mounts file.
+mount_table=${AIC_TEST_MOUNTS:-/proc/self/mounts}
+windows_mounts=
+if [ -f "$mount_table" ]; then
+    windows_mounts=$(awk '
+        $3 == "drvfs" || ($3 == "9p" && $4 ~ /(^|,)aname=drvfs(;|,|$)/) {
+            mount = $2
+            gsub(/\\040/, " ", mount)
+            gsub(/\\011/, "\t", mount)
+            gsub(/\\012/, "\n", mount)
+            gsub(/\\134/, "\\", mount)
+            print mount
+        }
+    ' "$mount_table")
+fi
+is_windows_path() {
+    case $1 in
+        *.[eE][xX][eE]|*.[cC][mM][dD]|*.[bB][aA][tT]|"$windows_mount_root"/[a-zA-Z]/*) return 0 ;;
+    esac
+    while IFS= read -r mount; do
+        [ -n "$mount" ] || continue
+        case $1 in "$mount"|"$mount"/*) return 0 ;; esac
+    done <<EOF
+$windows_mounts
+EOF
+    return 1
+}
+resolve_native_cli() {
+    cli=$1
+    old_ifs=$IFS
+    IFS=:
+    for directory in $PATH; do
+        case $directory in /*) ;; *) continue ;; esac
+        candidate=$directory/$cli
+        is_windows_path "$candidate" && continue
+        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            resolved=$(readlink -f "$candidate") || continue
+            [ -n "$resolved" ] || continue
+            is_windows_path "$resolved" && continue
+            IFS=$old_ifs
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    IFS=$old_ifs
+    printf '%s not found. Install it on this system (inside WSL on Windows); a Windows-side %s cannot use these logins.\n' "$cli" "$cli" >&2
+    return 1
+}
 if [ "${1:-}" = "tui" ] && [ $# -eq 1 ]; then
     if [ -x "$here/aic-tui" ]; then exec "$here/aic-tui"; fi
     exec aic-tui
@@ -35,8 +88,9 @@ if [ $# -eq 0 ]; then
 fi
 if [ "$1" = "login" ] && { [ $# -eq 2 ] || [ $# -eq 3 ]; }; then
     # claude auth login keeps the previous login valid; re-save it first so its latest refresh is kept.
+    native_claude=$(resolve_native_cli claude) || exit 1
     "$binary" claude-login checkpoint
-    if [ $# -eq 3 ]; then claude auth login --claudeai --email "$3"; else claude auth login --claudeai; fi
+    if [ $# -eq 3 ]; then "$native_claude" auth login --claudeai --email "$3"; else "$native_claude" auth login --claudeai; fi
     exec "$binary" claude-login save "$2"
 fi
 if [ "$1" = "usage" ]; then exec "$binary" usage; fi
@@ -49,8 +103,9 @@ if [ "$1" = "codex" ]; then
     shift
     if [ "${1:-}" = "login" ] && [ $# -eq 2 ]; then
         # codex login revokes the login in auth.json, so save it and clear the file first.
+        native_codex=$(resolve_native_cli codex) || exit 1
         "$binary" codex-login prepare-login
-        codex login
+        "$native_codex" login
         exec "$binary" codex-login save "$2"
     fi
     exec "$binary" codex-login "$@"

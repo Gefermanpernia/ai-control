@@ -11,7 +11,8 @@
   </picture>
 </p>
 
-AI Control is a small macOS menu-bar app, with a terminal UI for Linux. It keeps
+AI Control is a small macOS menu-bar app, with a terminal UI for Linux and
+Windows (WSL). It keeps
 a saved copy of each account's login, swaps the live login when you pick another
 account, and shows how much of each account's usage limits is left. Logins never
 leave your computer: on macOS they are kept in your login Keychain, on Linux in
@@ -36,7 +37,7 @@ files only your user can read, and they are never sent anywhere.
 ## Requirements
 
 - macOS 13 or later on Apple silicon, or Linux (Debian 12+, Ubuntu 22.04+, Arch)
-  on x86_64 or arm64
+  on x86_64 or arm64, or Windows through WSL 2 with one of those distributions
 - Claude Code installed with the native installer (`~/.local/bin/claude`)
 - Codex CLI signed in with ChatGPT
 
@@ -134,6 +135,24 @@ open the terminal UI:
 
 Usage is loaded when the UI opens and when you press `r`, never in the
 background.
+
+### Windows (WSL)
+
+AI Control runs inside WSL 2 and manages the Claude Code and Codex installed
+**inside WSL**, not the Windows versions.
+
+1. Install a distribution such as Ubuntu from a Windows terminal:
+   `wsl --install -d Ubuntu`.
+2. Open it and install Claude Code with the native installer and the Codex CLI
+   inside WSL, as you would on Linux.
+3. Install the `amd64` `.deb` from the
+   [latest release](https://github.com/Gefermanpernia/ai-control/releases/latest)
+   as in [Linux](#linux), then run `aic`.
+
+Signing in opens your Windows browser; if it does not, open the link the CLI
+prints. If a `codex` or `claude` installed on
+Windows is also on your `PATH` (WSL adds Windows folders under `/mnt/c`),
+AI Control ignores it and asks you to install the CLI inside WSL.
 
 ### Uninstall
 
@@ -259,6 +278,8 @@ change — stops the switch before it writes anything.
 
 - Not signed by Apple, so macOS asks for confirmation the first time it opens.
 - On Linux there is no tray icon yet; use `aic` or the terminal UI.
+- On Windows only WSL 2 is supported; Claude Code and Codex installed directly on
+  Windows are not managed.
 - Claude Code must come from the native installer; other installs are refused.
 - When a Claude Code update changes how logins are stored, switching stops until
   the new build is reviewed.
