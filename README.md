@@ -132,10 +132,11 @@ open the terminal UI:
 | `n` | Rename the chosen account |
 | `s` | Save the account you are signed in to now |
 | `r` | Reload usage |
-| `q` | Quit |
+| `q`, `Esc` or Ctrl+C | Quit |
 
 Usage is loaded when the UI opens and when you press `r`, never in the
 background.
+Usage bars are green below 75%, yellow below 90% and red from 90%.
 
 The UI shows Claude Code and Codex only when their CLI is installed or you have
 saved accounts for them.

@@ -329,3 +329,23 @@ fn escape_cancels_save() {
     assert_eq!(app.mode, Mode::Normal);
     assert!(app.input.is_empty());
 }
+#[test]
+fn ctrl_c_quits_from_every_mode_and_is_never_typed() {
+    use aic_tui::app::key_from;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert_eq!(key_from(ctrl_c), Some(Key::Interrupt));
+    assert_eq!(
+        key_from(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+        Some(Key::Char('c'))
+    );
+    let mut app = two_logins();
+    assert_eq!(app.key(Key::Interrupt), Effect::Quit);
+    for enter in [Key::Char('s'), Key::Char('n'), Key::Char('a'), Key::Enter] {
+        let mut app = two_logins();
+        app.key(enter);
+        type_text(&mut app, "ab");
+        assert_eq!(app.key(Key::Interrupt), Effect::Quit, "{enter:?}");
+        assert!(!app.input.contains('c'));
+    }
+}
