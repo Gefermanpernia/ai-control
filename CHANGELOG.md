@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/Gefermanpernia/ai-control/compare/v0.3.0...v0.3.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **tui:** explain a missing engine and show only the providers the user has ([#31](https://github.com/Gefermanpernia/ai-control/issues/31)) ([4bceba7](https://github.com/Gefermanpernia/ai-control/commit/4bceba7fd74a4631ca7e543a8f7306d8486d5398)), closes [#30](https://github.com/Gefermanpernia/ai-control/issues/30)
+
 ## [0.3.0](https://github.com/Gefermanpernia/ai-control/compare/v0.2.0...v0.3.0) (2026-09-27)
 
 
