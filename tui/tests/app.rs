@@ -1,11 +1,21 @@
 use aic_tui::{
     app::{App, Effect, Key, Mode},
-    status::parse,
+    status::{parse, Status},
 };
 
 const SAMPLE: &str = r#"{"version":1,"claude":{"available":true,"selected":"home","logins":[{"name":"home","needsLogin":false,"usage":{"windows":[{"label":"5h","usedPercent":25.0,"resetsAt":"2026-09-27T00:00:00Z"}],"resetsAvailable":null,"fetchedAt":"2026-09-26T00:00:00Z"},"usageError":null}]},"codex":{"available":true,"inUse":null,"logins":[{"name":"work","email":null,"usage":null,"usageError":"offline"}]}}"#;
+const TWO_LOGINS: &str = r#"{"version":1,"claude":{"available":true,"logins":[{"name":"a","needsLogin":false},{"name":"b","needsLogin":false}]},"codex":{"available":true,"logins":[{"name":"a","email":null},{"name":"b","email":null}]}}"#;
 fn app() -> App {
     App::new(parse(SAMPLE).unwrap())
+}
+fn two_logins() -> App {
+    App::new(parse(TWO_LOGINS).unwrap())
+}
+fn reordered() -> Status {
+    let mut status = parse(TWO_LOGINS).unwrap();
+    status.claude.logins.swap(0, 1);
+    status.codex.logins.swap(0, 1);
+    status
 }
 fn type_text(app: &mut App, text: &str) {
     for ch in text.chars() {
@@ -37,6 +47,50 @@ fn enter_requires_confirmation_to_switch() {
             extra: None
         }
     );
+}
+#[test]
+fn confirm_target_survives_reorder_and_cursor_change() {
+    let mut app = two_logins();
+    app.key(Key::Down);
+    app.key(Key::Enter);
+    app.apply_status(reordered(), false);
+    app.positions[0] = 1;
+    assert!(
+        matches!(app.key(Key::Char('y')), Effect::Action { verb: "use", alias, .. } if alias == "b")
+    );
+}
+#[test]
+fn rename_target_survives_reorder_and_cursor_change() {
+    let mut app = two_logins();
+    app.key(Key::Down);
+    app.key(Key::Char('n'));
+    type_text(&mut app, "new_b");
+    app.apply_status(reordered(), false);
+    app.positions[0] = 1;
+    assert!(
+        matches!(app.key(Key::Enter), Effect::Action { verb: "rename", alias, extra: Some(new), .. } if alias == "b" && new == "new_b")
+    );
+}
+#[test]
+fn missing_confirm_target_does_not_emit_action() {
+    let mut app = two_logins();
+    app.key(Key::Down);
+    app.key(Key::Enter);
+    let mut removed = parse(TWO_LOGINS).unwrap();
+    removed.claude.logins.pop();
+    app.apply_status(removed, false);
+    assert_eq!(app.key(Key::Char('y')), Effect::None);
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.action_success, Some(false));
+    assert!(app.message.contains("no longer saved"));
+}
+#[test]
+fn status_reorder_keeps_both_provider_cursors_on_login_names() {
+    let mut app = two_logins();
+    app.positions = [1, 1];
+    app.apply_status(reordered(), false);
+    assert_eq!(app.positions, [0, 0]);
+    assert_eq!(app.name(), Some("b"));
 }
 #[test]
 fn non_yes_confirmation_cancels_without_action() {
