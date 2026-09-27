@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/Gefermanpernia/ai-control/compare/v0.2.0...v0.3.0) (2026-09-27)
+
+
+### Features
+
+* **tui:** align logins, show relative update time, color usage by level ([#26](https://github.com/Gefermanpernia/ai-control/issues/26)) ([34718d6](https://github.com/Gefermanpernia/ai-control/commit/34718d63cc6bdc4020d22a2b03d4424fa02052ea))
+* **wsl:** run on Windows through WSL without using Windows-side CLIs ([#25](https://github.com/Gefermanpernia/ai-control/issues/25)) ([a1b9476](https://github.com/Gefermanpernia/ai-control/commit/a1b947682dd455bff7c62d6091d43aeeda7ac183)), closes [#20](https://github.com/Gefermanpernia/ai-control/issues/20)
+
+
+### Bug Fixes
+
+* **linux:** create the data directory on first use so Codex accounts can be added ([#28](https://github.com/Gefermanpernia/ai-control/issues/28)) ([0e3002a](https://github.com/Gefermanpernia/ai-control/commit/0e3002a9716758dc5f59f362f6918154175bb63e))
+
 ## [0.2.0](https://github.com/Gefermanpernia/ai-control/compare/v0.1.0...v0.2.0) (2026-09-27)
 
 
