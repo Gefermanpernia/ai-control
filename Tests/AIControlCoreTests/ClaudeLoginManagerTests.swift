@@ -1330,6 +1330,17 @@ struct ClaudeLoginManagerTests {
         #expect(store.updateCount == 0)
     }
 
+    @Test("The manager lock creates missing parent directories owner-only on first use")
+    func managerLockCreatesMissingParents() throws {
+        let root = try disposableDirectory("lock-parents")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let parent = root.appendingPathComponent("share/ai-control", isDirectory: true)
+        let lock = try ManagerFileLock.acquire(directory: parent.appendingPathComponent("codex").path)
+        lock.release()
+        let mode = try FileManager.default.attributesOfItem(atPath: parent.path)[.posixPermissions] as? Int
+        #expect(mode == 0o700)
+    }
+
     @Test("Command-scoped save holds one lock and orders routing, state, capture, mutation, and verification")
     func commandScopedSaveOrdersEveryGuard() throws {
         let directory = try disposableDirectory("command-save")
