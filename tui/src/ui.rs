@@ -149,7 +149,9 @@ fn rows(app: &App, provider: usize, now: OffsetDateTime) -> Vec<Line<'static>> {
         }
     }
     if lines.is_empty() {
-        lines.push(Line::from("No saved logins"));
+        lines.push(Line::from(
+            "No saved logins · s saves the account you are signed in to, a adds another",
+        ));
     }
     lines
 }
@@ -263,6 +265,7 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
         },
         Mode::Confirm => "Switch login? y/n".into(),
         Mode::Rename => format!("New alias: {}", app.input),
+        Mode::Save => format!("Save current login as: {}", app.input),
         Mode::AddAlias => format!("Alias: {}", app.input),
         Mode::AddEmail => format!("Claude email (optional): {}", app.input),
     };
@@ -289,7 +292,7 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
     } else {
         Style::default()
     };
-    frame.render_widget(Paragraph::new(vec![Line::from(format!("↑↓/jk move · Tab provider · Enter switch · n rename · a add · r usage · q quit · updated {updated}")), Line::from(Span::styled(prompt, style))]), area);
+    frame.render_widget(Paragraph::new(vec![Line::from(format!("↑↓/jk move · Tab provider · Enter switch · n rename · s save · a add · r usage · q quit · updated {updated}")), Line::from(Span::styled(prompt, style))]), area);
 }
 
 #[cfg(test)]
@@ -432,6 +435,23 @@ mod tests {
             image.contains("Install Claude Code or the Codex CLI"),
             "{image}"
         );
+    }
+    #[test]
+    fn save_is_offered_in_the_footer_and_empty_panels() {
+        let s = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":false,"logins":[]}}"#;
+        let mut app = App::new(parse(s).unwrap());
+        let buffer = rendered(&app, 140, 12, OffsetDateTime::UNIX_EPOCH);
+        let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
+        assert!(
+            image.contains("s saves the account you are signed in to"),
+            "{image}"
+        );
+        assert!(image.contains("s save"), "{image}");
+        app.key(crate::app::Key::Char('s'));
+        app.key(crate::app::Key::Char('p'));
+        let buffer = rendered(&app, 140, 12, OffsetDateTime::UNIX_EPOCH);
+        let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
+        assert!(image.contains("Save current login as: p"), "{image}");
     }
     #[test]
     fn snapshot_and_narrow() {
