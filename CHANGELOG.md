@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Gefermanpernia/ai-control/compare/v0.3.1...v0.4.0) (2026-09-27)
+
+
+### Features
+
+* **tui:** save the account you are signed in to with s ([#34](https://github.com/Gefermanpernia/ai-control/issues/34)) ([bd418ca](https://github.com/Gefermanpernia/ai-control/commit/bd418ca404c27d06a06ca30c0c264ff0a2ebff32)), closes [#33](https://github.com/Gefermanpernia/ai-control/issues/33)
+
 ## [0.3.1](https://github.com/Gefermanpernia/ai-control/compare/v0.3.0...v0.3.1) (2026-09-27)
 
 
