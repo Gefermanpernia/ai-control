@@ -1,11 +1,11 @@
 use aic_tui::{
-    app::{App, Effect, Key, Loading},
+    app::{key_from, App, Effect, Loading},
     engine::{engine_path, Engine, ProcessRunner, SubprocessEngine},
     status::Status,
     ui,
 };
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -46,18 +46,6 @@ impl Drop for Screen {
 fn initial() -> Status {
     // Empty, unavailable snapshot until the background fetch completes.
     aic_tui::status::parse(r#"{"version":1,"claude":{"available":false,"selected":null,"logins":[]},"codex":{"available":false,"inUse":null,"logins":[]}}"#).expect("static status")
-}
-fn key(code: KeyCode) -> Option<Key> {
-    match code {
-        KeyCode::Up => Some(Key::Up),
-        KeyCode::Down => Some(Key::Down),
-        KeyCode::Tab => Some(Key::Tab),
-        KeyCode::Enter => Some(Key::Enter),
-        KeyCode::Esc => Some(Key::Esc),
-        KeyCode::Backspace => Some(Key::Backspace),
-        KeyCode::Char(c) => Some(Key::Char(c)),
-        _ => None,
-    }
 }
 fn spawn_status(tx: mpsc::Sender<(u64, Result<Status, String>)>, revision: u64, usage: bool) {
     std::thread::spawn(move || {
@@ -102,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if event.kind != KeyEventKind::Press {
             continue;
         }
-        let Some(key) = key(event.code) else { continue };
+        let Some(key) = key_from(event) else { continue };
         match app.key(key) {
             Effect::None => {}
             Effect::Quit => break,

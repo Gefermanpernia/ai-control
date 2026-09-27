@@ -49,10 +49,10 @@ fn login_line(
             };
             let color = if pct >= 90.0 {
                 Color::Red
-            } else if pct >= 70.0 {
+            } else if pct >= 75.0 {
                 Color::Yellow
             } else {
-                Color::Reset
+                Color::Green
             };
             let filled = (pct / 20.0).round() as usize;
             spans.push(Span::raw(format!("  {} ", window.label)));
@@ -351,15 +351,15 @@ mod tests {
 
     #[test]
     fn usage_bars_and_percentages_keep_level_color_on_selected_row() {
-        let status = parse(r#"{"version":1,"claude":{"available":true,"logins":[{"name":"levels","needsLogin":false,"usage":{"windows":[{"label":"a","usedPercent":69},{"label":"b","usedPercent":70},{"label":"c","usedPercent":89},{"label":"d","usedPercent":90}],"fetchedAt":"2026-01-01T00:00:00Z"}}]},"codex":{"available":false,"logins":[]}}"#).unwrap();
+        let status = parse(r#"{"version":1,"claude":{"available":true,"logins":[{"name":"levels","needsLogin":false,"usage":{"windows":[{"label":"a","usedPercent":74},{"label":"b","usedPercent":75},{"label":"c","usedPercent":89},{"label":"d","usedPercent":90}],"fetchedAt":"2026-01-01T00:00:00Z"}}]},"codex":{"available":false,"logins":[]}}"#).unwrap();
         let app = App::new(status);
         let buffer = rendered(&app, 120, 12, OffsetDateTime::UNIX_EPOCH);
         let line = row(&buffer, 1);
         let name = line.find("levels").unwrap() as u16;
         assert_eq!(buffer[(name, 1)].fg, Color::Cyan);
         for (label, percent, expected) in [
-            ("a", "69%", Color::Reset),
-            ("b", "70%", Color::Yellow),
+            ("a", "74%", Color::Green),
+            ("b", "75%", Color::Yellow),
             ("c", "89%", Color::Yellow),
             ("d", "90%", Color::Red),
         ] {

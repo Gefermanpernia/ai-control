@@ -1,4 +1,5 @@
 use crate::status::Status;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Loading {
@@ -15,6 +16,24 @@ pub enum Key {
     Esc,
     Backspace,
     Char(char),
+    /// Ctrl+C: raw mode delivers it as a key instead of a signal.
+    Interrupt,
+}
+/// Maps a terminal key event to the keys the UI handles.
+pub fn key_from(event: KeyEvent) -> Option<Key> {
+    match event.code {
+        KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Key::Interrupt)
+        }
+        KeyCode::Up => Some(Key::Up),
+        KeyCode::Down => Some(Key::Down),
+        KeyCode::Tab => Some(Key::Tab),
+        KeyCode::Enter => Some(Key::Enter),
+        KeyCode::Esc => Some(Key::Esc),
+        KeyCode::Backspace => Some(Key::Backspace),
+        KeyCode::Char(c) => Some(Key::Char(c)),
+        _ => None,
+    }
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -197,6 +216,9 @@ impl App {
         self.updated = Some(time::OffsetDateTime::now_utc());
     }
     pub fn key(&mut self, key: Key) -> Effect {
+        if key == Key::Interrupt {
+            return Effect::Quit;
+        }
         match self.mode {
             Mode::Confirm => {
                 self.mode = Mode::Normal;
