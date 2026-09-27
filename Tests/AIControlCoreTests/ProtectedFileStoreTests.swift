@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 import Testing
 @testable import AIControlCore
 
@@ -61,6 +66,30 @@ struct ProtectedFileStoreTests {
         try store.create(data: Data("x".utf8)) {}
         try store.delete()
         #expect(!FileManager.default.fileExists(atPath: store.path))
+    }
+
+    @Test("A saved file readable by others is repaired to owner-only when read")
+    func repairsLooseMode() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.path + "/logins.json"
+        #expect(FileManager.default.createFile(atPath: path, contents: Data("secret".utf8),
+                                               attributes: [.posixPermissions: 0o644]))
+        #expect(mode(path) == 0o644)
+        let store = ProtectedFileStore(path: path)
+
+        #expect(try store.read() == Data("secret".utf8))
+        #expect(mode(path) == 0o600)
+    }
+
+    @Test("Anything but a regular file is refused without blocking")
+    func refusesFIFO() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.path + "/logins.json"
+        #expect(mkfifo(path, 0o600) == 0)
+
+        #expect(throws: IsolatedKeychainError.corrupt) { try ProtectedFileStore(path: path).read() }
     }
 
     @Test("Symbolic links are refused instead of followed")

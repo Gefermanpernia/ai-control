@@ -10,14 +10,33 @@ import Glibc
 /// Used wherever there is no Keychain: Claude Code itself keeps its Linux login in such a file
 /// (`~/.claude/.credentials.json`, mode 600), and AI Control keeps its saved logins the same way there.
 /// Symbolic links and files owned by another user are refused rather than followed.
+///
+/// The store does not lock: `update` and `replace` read and then rename, so callers that mutate
+/// AI Control's own files hold `ManagerFileLock` for the whole command (every current caller does).
+/// Claude Code does not take that lock, which is why `.credentials.json` changes go through `replace`.
 struct ProtectedFileStore: ClaudeLoginDataStore, IsolatedCredentialItem {
     let path: String
     var beforeMutation: () throws -> Void = {}
 
+    /// Opens the file once without following links and checks that same descriptor, so the file cannot
+    /// be swapped between the check and the read. A file others can access is repaired to owner-only.
     func read() throws -> Data {
-        try checkedExisting()
-        guard let data = FileManager.default.contents(atPath: path) else { throw IsolatedKeychainError.corrupt }
-        return data
+        // O_NONBLOCK keeps a FIFO planted at the path from blocking the open; it is refused below.
+        let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw errno == ENOENT ? IsolatedKeychainError.missing : IsolatedKeychainError.corrupt
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0, (metadata.st_mode & S_IFMT) == S_IFREG,
+              metadata.st_uid == geteuid() else {
+            throw IsolatedKeychainError.corrupt
+        }
+        if metadata.st_mode & 0o077 != 0 {
+            guard fchmod(descriptor, 0o600) == 0 else { throw IsolatedKeychainError.operatingSystem(OSStatus(errno)) }
+        }
+        guard let data = try? handle.readToEnd() else { throw IsolatedKeychainError.corrupt }
+        return data ?? Data()
     }
 
     func create(data: Data) throws { try create(data: data, guardedBy: beforeMutation) }
