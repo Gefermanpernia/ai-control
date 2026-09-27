@@ -1,5 +1,5 @@
 #!/bin/sh
-# End-to-end WSL check: the installed engine and terminal UI refuse a codex that lives on a Windows drive.
+# End-to-end WSL check: the installed engine and terminal UI never use a codex that lives on a Windows drive.
 #   scripts/e2e-tui <directory on a Windows drive>
 # Saved logins (XDG_DATA_HOME), the Codex login (CODEX_HOME) and PATH point into a throwaway directory, so
 # no real login is written. The engine takes the home directory from the user database, not $HOME, which
@@ -31,21 +31,27 @@ export XDG_DATA_HOME CODEX_HOME PATH
 if "$engine" codex-login add e2e > "$work/engine" 2>&1; then fail 'engine accepted a Windows-side codex'; fi
 grep -q 'inside WSL on Windows' "$work/engine" || { cat "$work/engine" >&2; fail 'engine gave no guidance'; }
 
-# The terminal UI driving the same engine: Tab to Codex, a to add, alias, Enter.
+# The status does not count a Windows-side codex as installed.
+"$engine" status --json > "$work/status"
+grep -q '"codex":{[^}]*"installed":false' "$work/status" || { cat "$work/status" >&2; fail 'status reported the Windows codex as installed'; }
+
+# The terminal UI on the same engine: no Codex panel (nothing installed here), so keys that would add a
+# Codex account do nothing.
 wait_for() {
     tries=0
     while :; do
         tmux_cmd capture-pane -p -t e2e > "$pane" 2>/dev/null || :
-        if grep -q "$1" "$pane" && grep -q 'Codex' "$pane"; then return 0; fi
+        if grep -q "$1" "$pane"; then return 0; fi
         tries=$((tries + 1))
         [ "$tries" -lt 30 ] || fail "timed out waiting for: $1"
         sleep 1
     done
 }
 tmux_cmd new-session -d -s e2e -x 250 -y 30 "AIC_ENGINE=$engine aic-tui"
-wait_for 'Claude'
+wait_for 'Install Claude Code or the Codex CLI'
+if grep -q 'Codex─' "$pane"; then fail 'the terminal UI showed a Codex panel'; fi
 tmux_cmd send-keys -t e2e Tab a e2e Enter
-wait_for 'inside WSL on Windows'
+sleep 2
 tmux_cmd send-keys -t e2e q
 tries=0
 while tmux_cmd has-session -t e2e 2>/dev/null; do
@@ -54,4 +60,4 @@ while tmux_cmd has-session -t e2e 2>/dev/null; do
     sleep 1
 done
 [ ! -e "$marker" ] || fail 'the Windows-side codex ran'
-printf 'scripts/e2e-tui: engine and terminal UI refused %s/codex\n' "$windows_dir"
+printf 'scripts/e2e-tui: engine and terminal UI did not use %s/codex\n' "$windows_dir"
