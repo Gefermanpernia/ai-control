@@ -2,9 +2,22 @@ use aic_tui::{
     engine::{engine_path, message, Engine, Runner, SubprocessEngine},
     status::parse,
 };
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    process::{ExitStatus, Output},
+    sync::Mutex,
+};
+
+/// An exit status with `code`, built the way each platform encodes it.
 #[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
-use std::{collections::HashMap, path::PathBuf, process::Output, sync::Mutex};
+fn exit_status(code: i32) -> ExitStatus {
+    std::os::unix::process::ExitStatusExt::from_raw(code << 8)
+}
+#[cfg(windows)]
+fn exit_status(code: i32) -> ExitStatus {
+    std::os::windows::process::ExitStatusExt::from_raw(code as u32)
+}
 
 const SAMPLE: &str = r#"{"version":1,"claude":{"available":true,"selected":"home","logins":[{"name":"home","needsLogin":false,"usage":{"windows":[{"label":"5h","usedPercent":25.0,"resetsAt":"2026-09-27T00:00:00Z"}],"resetsAvailable":null,"fetchedAt":"2026-09-26T00:00:00Z"},"usageError":null}]},"codex":{"available":true,"inUse":null,"logins":[{"name":"work","email":null,"usage":null,"usageError":"offline"}]}}"#;
 
@@ -49,6 +62,7 @@ struct Fake {
     calls: Mutex<Vec<(Vec<String>, bool)>>,
     code: i32,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 impl Fake {
     fn response(code: i32, stdout: &str) -> Self {
@@ -57,6 +71,10 @@ impl Fake {
             stdout: stdout.as_bytes().to_vec(),
             ..Self::default()
         }
+    }
+    fn with_stderr(mut self, stderr: &str) -> Self {
+        self.stderr = stderr.as_bytes().to_vec();
+        self
     }
     fn calls(&self) -> Vec<(Vec<String>, bool)> {
         self.calls.lock().unwrap().clone()
@@ -74,9 +92,9 @@ impl Runner for &Fake {
             .unwrap()
             .push((args.to_vec(), interactive));
         Ok(Output {
-            status: std::process::ExitStatus::from_raw(self.code << 8),
+            status: exit_status(self.code),
             stdout: self.stdout.clone(),
-            stderr: b"stderr fallback\n".to_vec(),
+            stderr: self.stderr.clone(),
         })
     }
 }
@@ -189,4 +207,41 @@ fn installed_defaults_to_true_for_older_engines() {
     assert!(status.claude.installed && status.codex.installed);
     let status = parse(r#"{"version":1,"claude":{"available":true,"installed":false,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]}}"#).unwrap();
     assert!(!status.claude.installed && status.codex.installed);
+}
+#[test]
+fn failed_actions_keep_the_engine_line_and_add_the_stderr_detail() {
+    let fake = Fake::response(3, "Blocked: no\n").with_stderr("warning\nfatal: disk full\n");
+    let engine = SubprocessEngine::new(PathBuf::from("fake"), &fake);
+    assert_eq!(
+        engine
+            .action("claude-login", "use", "home", None)
+            .unwrap()
+            .message,
+        "Blocked: no (fatal: disk full)"
+    );
+    assert_eq!(
+        engine.status(false).unwrap_err(),
+        "Blocked: no (fatal: disk full)"
+    );
+    let same = Fake::response(3, "Blocked: no\n").with_stderr("Blocked: no\n");
+    let engine = SubprocessEngine::new(PathBuf::from("fake"), &same);
+    assert_eq!(
+        engine
+            .action("claude-login", "use", "home", None)
+            .unwrap()
+            .message,
+        "Blocked: no"
+    );
+}
+#[test]
+fn successful_actions_show_only_the_engine_line() {
+    let fake = Fake::response(0, "Switched\n").with_stderr("noise\n");
+    let engine = SubprocessEngine::new(PathBuf::from("fake"), &fake);
+    assert_eq!(
+        engine
+            .action("claude-login", "use", "home", None)
+            .unwrap()
+            .message,
+        "Switched"
+    );
 }
