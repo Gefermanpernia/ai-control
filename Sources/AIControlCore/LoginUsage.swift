@@ -156,16 +156,59 @@ struct ClaudeIsolatedRenewal {
     }
 }
 
-/// `usage` prints every saved login's usage; `claude-login renew <alias>` renews one saved Claude login.
+/// Runs async adapter commands from the synchronous CLI without reimplementing login operations.
 func runAsyncReport(arguments: [String], output: @escaping @Sendable (String) -> Void = { print($0) }) -> Int32 {
-    let claude = ClaudeLoginAppAdapter.configured()
-    let codex = CodexLoginAppAdapter.configured()
+    runAsyncReport(arguments: arguments, claude: .configured(), codex: .configured(), output: output)
+}
+
+/// Injectable bridge for status and edits; tests can supply adapters without live login files.
+func runAsyncReport(
+    arguments: [String], claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter,
+    output: @escaping @Sendable (String) -> Void
+) -> Int32 {
     let status = LockedStatus()
     let done = DispatchSemaphore(value: 0)
     Task {
         defer { done.signal() }
-        if arguments.count == 3 {
-            let result = arguments[0] == "codex-login" ? await codex.renew(alias: arguments[2]) : await claude.renew(alias: arguments[2])
+        if arguments.first == "status" {
+            guard arguments.count >= 2, arguments[1] == "--json",
+                  arguments.count == 2 || (arguments.count == 3 && arguments[2] == "--usage") else {
+                output("Usage: AIControl status --json [--usage]")
+                status.value = 2
+                return
+            }
+            let snapshot = await loginStatus(claude: claude, codex: codex, includeUsage: arguments.count == 3)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            do {
+                output(String(decoding: try encoder.encode(snapshot), as: UTF8.self))
+            } catch {
+                output("Blocked: status could not be encoded.")
+                status.value = 3
+            }
+            return
+        }
+        if arguments.count == 3 || arguments.count == 4 {
+            let result: LoginEditResult
+            if arguments[1] == "add" {
+                guard [3, 4].contains(arguments.count),
+                      (arguments[0] == "claude-login" || (arguments[0] == "codex-login" && arguments.count == 3)),
+                      arguments[2].range(of: #"\A[a-z][a-z0-9_-]{0,31}\z"#, options: .regularExpression) != nil else {
+                    output("Usage: AIControl claude-login add <alias> [email] | codex-login add <alias>")
+                    status.value = 2
+                    return
+                }
+                result = arguments[0] == "codex-login" ? await codex.add(alias: arguments[2]) :
+                    await claude.add(alias: arguments[2], email: arguments.count == 4 ? arguments[3] : nil)
+            } else {
+                guard arguments.count == 3, arguments[1] == "renew" else {
+                    output("Usage: AIControl claude-login renew <alias> | codex-login renew <alias>")
+                    status.value = 2
+                    return
+                }
+                result = arguments[0] == "codex-login" ? await codex.renew(alias: arguments[2]) : await claude.renew(alias: arguments[2])
+            }
             switch result {
             case .done(let text): output(text)
             case .blocked(let text): output(text); status.value = 3

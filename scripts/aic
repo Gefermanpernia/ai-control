@@ -6,6 +6,7 @@
 #   aic login <name> [email]  sign in to another Claude account and save it
 #   aic list | rename <name> <new-name> | recover | renew <name>
 #   aic usage                 usage of every saved Claude and Codex login
+#   aic status [--json] [--usage]   machine-readable login status
 #   aic codex save|use|list|rename ...   the same for Codex
 #   aic codex login <name>               sign in to another Codex account safely and save it
 set -eu
@@ -28,6 +29,11 @@ if [ "$1" = "login" ] && { [ $# -eq 2 ] || [ $# -eq 3 ]; }; then
     exec "$binary" claude-login save "$2"
 fi
 if [ "$1" = "usage" ]; then exec "$binary" usage; fi
+if [ "$1" = "status" ]; then
+    shift
+    if [ "${1:-}" = "--json" ]; then shift; fi
+    exec "$binary" status --json "$@"
+fi
 if [ "$1" = "codex" ]; then
     shift
     if [ "${1:-}" = "login" ] && [ $# -eq 2 ]; then
