@@ -41,6 +41,7 @@ pub struct App {
     pub provider: usize,
     pub positions: [usize; 2],
     pub mode: Mode,
+    pub target: Option<String>,
     pub input: String,
     pub pending_alias: String,
     pub message: String,
@@ -56,6 +57,7 @@ impl App {
             provider: 0,
             positions: [0; 2],
             mode: Mode::Normal,
+            target: None,
             input: String::new(),
             pending_alias: String::new(),
             message: String::new(),
@@ -80,6 +82,12 @@ impl App {
                 .map(|l| l.name.as_str())
         }
     }
+    fn target_exists(&self) -> bool {
+        self.target.as_deref().is_some_and(|name| {
+            (self.provider == 0 && self.status.claude.logins.iter().any(|l| l.name == name))
+                || (self.provider == 1 && self.status.codex.logins.iter().any(|l| l.name == name))
+        })
+    }
     pub fn provider_command(&self) -> &'static str {
         if self.provider == 0 {
             "claude-login"
@@ -100,6 +108,7 @@ impl App {
         self.message = text.into();
         self.action_success = Some(success);
         self.mode = Mode::Normal;
+        self.target = None;
         self.input.clear();
     }
     pub fn status_error(&mut self, error: &str) {
@@ -135,11 +144,26 @@ impl App {
                 }
             }
         }
+        fn follow<T>(old: &[T], new: &[T], index: usize, name: impl Fn(&T) -> &str) -> usize {
+            let selected = old.get(index).map(&name);
+            new.iter()
+                .position(|login| Some(name(login)) == selected)
+                .unwrap_or(index.min(new.len().saturating_sub(1)))
+        }
+        self.positions[0] = follow(
+            &self.status.claude.logins,
+            &status.claude.logins,
+            self.positions[0],
+            |l| &l.name,
+        );
+        self.positions[1] = follow(
+            &self.status.codex.logins,
+            &status.codex.logins,
+            self.positions[1],
+            |l| &l.name,
+        );
         self.status = status;
         self.status_loaded = true;
-        self.positions[0] =
-            self.positions[0].min(self.status.claude.logins.len().saturating_sub(1));
-        self.positions[1] = self.positions[1].min(self.status.codex.logins.len().saturating_sub(1));
         self.loading = None;
         self.updated = Some(
             time::OffsetDateTime::now_utc()
@@ -152,19 +176,24 @@ impl App {
             Mode::Confirm => {
                 self.mode = Mode::Normal;
                 if key == Key::Char('y') {
-                    if let Some(alias) = self.name() {
+                    if !self.target_exists() {
+                        self.message = "That login is no longer saved.".into();
+                        self.action_success = Some(false);
+                    } else {
                         return Effect::Action {
                             provider: self.provider_command(),
                             verb: "use",
-                            alias: alias.into(),
+                            alias: self.target.take().unwrap(),
                             extra: None,
                         };
                     }
                 }
+                self.target = None;
             }
             Mode::Rename | Mode::AddAlias | Mode::AddEmail => match key {
                 Key::Esc => {
                     self.mode = Mode::Normal;
+                    self.target = None;
                     self.input.clear();
                 }
                 Key::Backspace => {
@@ -182,11 +211,19 @@ impl App {
                         self.mode = Mode::AddEmail;
                         self.message = "Email (optional; Enter to skip):".into();
                     } else {
+                        if self.mode == Mode::Rename && !self.target_exists() {
+                            self.mode = Mode::Normal;
+                            self.target = None;
+                            self.input.clear();
+                            self.message = "That login is no longer saved.".into();
+                            self.action_success = Some(false);
+                            return Effect::None;
+                        }
                         let provider = self.provider_command();
                         let (verb, alias, extra) = match self.mode {
                             Mode::Rename => (
                                 "rename",
-                                self.name().unwrap_or_default().to_owned(),
+                                self.target.take().unwrap(),
                                 Some(self.input.clone()),
                             ),
                             Mode::AddAlias => ("add", self.input.clone(), None),
@@ -228,9 +265,13 @@ impl App {
                     self.positions[self.provider] =
                         (self.positions[self.provider] + 1).min(len.saturating_sub(1));
                 }
-                Key::Enter if self.name().is_some() => self.mode = Mode::Confirm,
-                Key::Char('n') if self.name().is_some() => {
-                    self.mode = Mode::Rename;
+                Key::Enter | Key::Char('n') if self.name().is_some() => {
+                    self.target = self.name().map(str::to_owned);
+                    self.mode = if key == Key::Enter {
+                        Mode::Confirm
+                    } else {
+                        Mode::Rename
+                    };
                     self.input.clear();
                 }
                 Key::Char('a') => {
