@@ -177,7 +177,7 @@ func runAsyncReport(
                 status.value = 2
                 return
             }
-            let snapshot = await loginStatus(claude: claude, codex: codex, includeUsage: arguments.count == 3)
+            let snapshot = await loginStatus(claude: claude, codex: codex, includeUsage: arguments.count == 3, installed: .live)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             encoder.dateEncodingStrategy = .iso8601

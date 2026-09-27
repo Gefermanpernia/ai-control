@@ -136,6 +136,9 @@ open the terminal UI:
 Usage is loaded when the UI opens and when you press `r`, never in the
 background.
 
+The UI shows Claude Code and Codex only when their CLI is installed or you have
+saved accounts for them.
+
 ### Windows (WSL)
 
 AI Control runs inside WSL 2 and manages the Claude Code and Codex installed

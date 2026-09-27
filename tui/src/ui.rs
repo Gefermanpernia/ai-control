@@ -163,24 +163,43 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
     }
     let footer_height = size.height.min(2);
     let available = size.height - footer_height;
-    let desired = [rows(app, 0, now).len(), rows(app, 1, now).len()].map(|lines| {
-        u16::try_from(lines.saturating_add(2))
-            .unwrap_or(u16::MAX)
-            .max(3)
-    });
-    let mut heights = [desired[0].min(available), 0];
-    if desired[0].saturating_add(desired[1]) > available {
-        heights[0] = (available / 2)
-            .max(available.saturating_sub(desired[1]))
-            .min(available.saturating_sub(2));
+    let visible = app.visible();
+    let desired: Vec<u16> = visible
+        .iter()
+        .map(|&provider| {
+            u16::try_from(rows(app, provider, now).len().saturating_add(2))
+                .unwrap_or(u16::MAX)
+                .max(3)
+        })
+        .collect();
+    let mut heights = vec![0; visible.len()];
+    match desired[..] {
+        [only] => heights[0] = only.min(available),
+        [first, second] => {
+            heights[0] = first.min(available);
+            if first.saturating_add(second) > available {
+                heights[0] = (available / 2)
+                    .max(available.saturating_sub(second))
+                    .min(available.saturating_sub(2));
+            }
+            heights[1] = second.min(available - heights[0]);
+        }
+        _ => {
+            let area = Rect::new(size.x, size.y, size.width, available.min(3));
+            if area.height >= 2 {
+                frame.render_widget(
+                    Paragraph::new("Install Claude Code or the Codex CLI, then press r to reload.")
+                        .block(Block::default().title("AI Control").borders(Borders::ALL)),
+                    area,
+                );
+            }
+        }
     }
-    heights[1] = desired[1].min(available - heights[0]);
-    let areas = [
-        Rect::new(size.x, size.y, size.width, heights[0]),
-        Rect::new(size.x, size.y + heights[0], size.width, heights[1]),
-    ];
-    for (i, title) in ["Claude", "Codex"].iter().enumerate() {
-        let area = areas[i];
+    let mut top = size.y;
+    for (slot, &i) in visible.iter().enumerate() {
+        let area = Rect::new(size.x, top, size.width, heights[slot]);
+        top += heights[slot];
+        let title = ["Claude", "Codex"][i];
         if area.height < 2 {
             continue;
         }
@@ -213,7 +232,7 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
                 .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0))
                 .block(
                     Block::default()
-                        .title(*title)
+                        .title(title)
                         .borders(Borders::ALL)
                         .border_style(border),
                 ),
@@ -396,6 +415,23 @@ mod tests {
         let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
         assert!(image.contains("Login status could not be read"), "{image}");
         assert!(!image.contains("switching is off"), "{image}");
+    }
+    #[test]
+    fn only_installed_or_saved_providers_are_drawn() {
+        let claude_only = parse(r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":false,"logins":[]}}"#).unwrap();
+        let buffer = rendered(&App::new(claude_only), 100, 12, OffsetDateTime::UNIX_EPOCH);
+        let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
+        assert!(
+            image.contains("Claude") && !image.contains("Codex"),
+            "{image}"
+        );
+        let none = parse(r#"{"version":1,"claude":{"available":true,"installed":false,"logins":[]},"codex":{"available":true,"installed":false,"logins":[]}}"#).unwrap();
+        let buffer = rendered(&App::new(none), 100, 12, OffsetDateTime::UNIX_EPOCH);
+        let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
+        assert!(
+            image.contains("Install Claude Code or the Codex CLI"),
+            "{image}"
+        );
     }
     #[test]
     fn snapshot_and_narrow() {

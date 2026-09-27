@@ -18,6 +18,28 @@ enum ExecutableLookup {
         return nil
     }
 
+    /// The first native executable on this system's PATH and usual install directories.
+    static func live(named name: String) -> String? {
+        first(
+            named: name, path: ProcessInfo.processInfo.environment["PATH"] ?? "",
+            extraDirectories: [NSHomeDirectory() + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"],
+            isExecutable: FileManager.default.isExecutableFile(atPath:),
+            resolve: { candidate in
+                guard let resolved = realpath(candidate, nil) else { return nil }
+                defer { free(resolved) }
+                return String(cString: resolved)
+            },
+            windowsMounts: {
+                #if os(Linux)
+                return windowsMounts(
+                    fromMountTable: (try? String(contentsOfFile: "/proc/self/mounts", encoding: .utf8)) ?? "")
+                #else
+                return []
+                #endif
+            }()
+        )
+    }
+
     static func isWindowsSide(_ path: String, windowsMounts: [String] = []) -> Bool {
         let name = (path as NSString).lastPathComponent.lowercased()
         if [".exe", ".cmd", ".bat"].contains(where: name.hasSuffix) { return true }

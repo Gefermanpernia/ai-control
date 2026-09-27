@@ -245,3 +245,46 @@ fn action_result_preserves_success_or_failure() {
     assert_eq!(app.message, "Blocked");
     assert_eq!(app.action_success, Some(false));
 }
+
+const CLAUDE_ONLY: &str = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":false,"logins":[]}}"#;
+const CODEX_ONLY: &str = r#"{"version":1,"claude":{"available":true,"installed":false,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]}}"#;
+
+#[test]
+fn providers_without_cli_or_saved_logins_are_hidden_and_skipped_by_tab() {
+    let mut app = App::new(parse(CLAUDE_ONLY).unwrap());
+    assert_eq!(app.visible(), vec![0]);
+    app.key(Key::Tab);
+    assert_eq!(app.provider, 0);
+}
+#[test]
+fn saved_logins_keep_a_provider_visible_without_its_cli() {
+    let mut status = parse(TWO_LOGINS).unwrap();
+    status.codex.installed = false;
+    assert_eq!(App::new(status).visible(), vec![0, 1]);
+}
+#[test]
+fn a_status_that_hides_the_current_provider_moves_to_a_visible_one() {
+    let mut app = two_logins();
+    app.key(Key::Tab);
+    assert_eq!(app.provider, 1);
+    app.apply_status(parse(CLAUDE_ONLY).unwrap(), false);
+    assert_eq!(app.provider, 0);
+    let mut app = App::new(parse(CODEX_ONLY).unwrap());
+    assert_eq!(app.visible(), vec![1]);
+    assert_eq!(app.provider, 1);
+    app.key(Key::Tab);
+    assert_eq!(app.provider, 1);
+}
+#[test]
+fn both_providers_show_until_a_status_was_read() {
+    let mut app = App::new(parse(CLAUDE_ONLY).unwrap());
+    app.status_error("AI Control engine not found (AIControl).");
+    assert_eq!(app.visible(), vec![0, 1]);
+}
+#[test]
+fn nothing_to_act_on_when_no_provider_is_visible() {
+    let none = r#"{"version":1,"claude":{"available":true,"installed":false,"logins":[]},"codex":{"available":true,"installed":false,"logins":[]}}"#;
+    let mut app = App::new(parse(none).unwrap());
+    app.key(Key::Char('a'));
+    assert_eq!(app.mode, Mode::Normal);
+}

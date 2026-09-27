@@ -488,27 +488,7 @@ extension ClaudeAppServices {
 extension CodexAppServices {
     static var live: Self {
         let codex: () throws -> String = {
-            let home = NSHomeDirectory()
-            guard let path = ExecutableLookup.first(
-                named: "codex", path: ProcessInfo.processInfo.environment["PATH"] ?? "",
-                extraDirectories: [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"],
-                isExecutable: FileManager.default.isExecutableFile(atPath:),
-                resolve: { candidate in
-                    guard let resolved = realpath(candidate, nil) else { return nil }
-                    defer { free(resolved) }
-                    return String(cString: resolved)
-                },
-                windowsMounts: {
-                    #if os(Linux)
-                    return ExecutableLookup.windowsMounts(
-                        fromMountTable: (try? String(contentsOfFile: "/proc/self/mounts", encoding: .utf8)) ?? "")
-                    #else
-                    return []
-                    #endif
-                }()
-            ) else {
-                throw NativeCodexRequired.missing
-            }
+            guard let path = ExecutableLookup.live(named: "codex") else { throw NativeCodexRequired.missing }
             return path
         }
         return .init(

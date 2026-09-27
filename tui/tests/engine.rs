@@ -183,3 +183,10 @@ fn missing_engine_explains_where_it_looked_and_how_to_fix_it() {
         assert!(error.contains("AIC_ENGINE"), "{error}");
     }
 }
+#[test]
+fn installed_defaults_to_true_for_older_engines() {
+    let status = parse(SAMPLE).unwrap();
+    assert!(status.claude.installed && status.codex.installed);
+    let status = parse(r#"{"version":1,"claude":{"available":true,"installed":false,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]}}"#).unwrap();
+    assert!(!status.claude.installed && status.codex.installed);
+}

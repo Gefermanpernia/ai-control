@@ -97,14 +97,14 @@ struct LoginStatusTests {
         #expect(root.keys.sorted() == ["claude", "codex", "version"])
         #expect(root["version"] as? Int == 1)
         let c = try #require(root["claude"] as? [String: Any])
-        #expect(c.keys.sorted() == ["available", "logins", "selected"])
+        #expect(c.keys.sorted() == ["available", "installed", "logins", "selected"])
         #expect(c["available"] as? Bool == true && c["selected"] as? String == "work")
         let ca = try #require((c["logins"] as? [[String: Any]])?.first)
         #expect(ca.keys.sorted() == ["name", "needsLogin", "usage", "usageError"])
         #expect(ca["name"] as? String == "work" && ca["needsLogin"] as? Bool == false)
         #expect(ca["usage"] is NSNull && ca["usageError"] is NSNull)
         let x = try #require(root["codex"] as? [String: Any])
-        #expect(x.keys.sorted() == ["available", "inUse", "logins"])
+        #expect(x.keys.sorted() == ["available", "inUse", "installed", "logins"])
         #expect(x["available"] as? Bool == true && x["inUse"] as? String == "home")
         let xa = try #require((x["logins"] as? [[String: Any]])?.first)
         #expect(xa.keys.sorted() == ["email", "name", "usage", "usageError"])
@@ -132,6 +132,14 @@ struct LoginStatusTests {
         #expect((window["usedPercent"] as? NSNumber)?.doubleValue == 12)
         let xa = try #require(((root["codex"] as? [String: Any])?["logins"] as? [[String: Any]])?.first)
         #expect(xa["usage"] is NSNull && xa["usageError"] as? String == "Usage could not be loaded.")
+    }
+
+    @Test("Status reports which CLIs are installed so the UI can hide the others")
+    func statusReportsInstalledCLIs() async throws {
+        let root = try document(await loginStatus(claude: .init(), codex: .init(), includeUsage: false,
+                                                  installed: .init(claude: true, codex: false)))
+        #expect((root["claude"] as? [String: Any])?["installed"] as? Bool == true)
+        #expect((root["codex"] as? [String: Any])?["installed"] as? Bool == false)
     }
 
     @Test("Unavailable and unreadable lists stay empty and unavailable")
