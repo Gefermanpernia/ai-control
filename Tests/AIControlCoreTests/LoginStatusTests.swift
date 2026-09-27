@@ -128,12 +128,52 @@ struct LoginStatusTests {
         let snapshot = await loginStatus(claude: .init(), codex: .init(), includeUsage: false, monitors: monitor)
         let root = try document(snapshot)
         let value = try #require((root["monitors"] as? [[String: Any]])?.first)
-        #expect(value.keys.sorted() == ["error", "id", "name", "usage"])
+        #expect(value.keys.sorted() == ["error", "id", "models", "name", "usage"])
+        #expect(value["models"] is NSNull)
         #expect(value["id"] as? String == "opencode-go")
         #expect(value["name"] as? String == "OpenCode Go")
         #expect(value["usage"] is NSNull && value["error"] is NSNull)
         let encoder = JSONEncoder()
         #expect(!String(decoding: try encoder.encode(snapshot), as: UTF8.self).contains(secret))
+    }
+
+    @Test("NaN and OpenCode Go encode in stable order with explicit model nulls and no keys")
+    func nanDocument() async throws {
+        let secret = "nan-fixture-secret"
+        let monitor = UsageMonitors(environment: ["OPENCODE_AUTH_CONTENT":
+            #"{"opencode-go":{"type":"api","key":"go-fixture-secret"}}"#, "NAN_API_KEY": secret],
+            readFile: { _ in Issue.record("unexpected file read"); throw StatusFailure() },
+            fetch: { request in
+                if request.url?.host == "api.nan.builders" {
+                    return (200, Data(#"{"totals":{"by_model":[{"model":"glm5.3-flash","prompt_tokens":1,"completion_tokens":1,"total_tokens":2000000000,"api_requests":1},{"model":"glm5.3","prompt_tokens":0,"completion_tokens":1,"total_tokens":1,"api_requests":1}]}}"#.utf8))
+                }
+                return (401, Data())
+            }, now: { ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z")! })
+        let snapshot = await loginStatus(claude: .init(), codex: .init(), includeUsage: false, monitors: monitor)
+        let values = try #require(try document(snapshot)["monitors"] as? [[String: Any]])
+        #expect(values.map { $0["id"] as? String } == ["opencode-go", "nan"])
+        for value in values {
+            #expect(value.keys.sorted() == ["error", "id", "models", "name", "usage"])
+            #expect(value["models"] is NSNull && value["usage"] is NSNull && value["error"] is NSNull)
+        }
+        let encoded = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
+        #expect(!encoded.contains(secret) && !encoded.contains("go-fixture-secret"))
+        let withUsage = await loginStatus(claude: .init(), codex: .init(), includeUsage: true, monitors: monitor)
+        let used = try #require(try document(withUsage)["monitors"] as? [[String: Any]])
+        #expect(used.map { $0["id"] as? String } == ["opencode-go", "nan"])
+        #expect(used[0]["models"] is NSNull)
+        #expect(used[1]["usage"] is NSNull && used[1]["error"] is NSNull)
+        let models = try #require(used[1]["models"] as? [[String: Any]])
+        #expect(models.count == 2)
+        #expect(models[0].keys.sorted() == ["model", "quotaTokens", "resetsAt", "totalTokens", "usedPercent"])
+        #expect(models[0]["model"] as? String == "glm5.3-flash")
+        #expect(models[0]["totalTokens"] as? Int == 2000000000)
+        #expect(models[0]["quotaTokens"] as? Int == 2000000000)
+        #expect((models[0]["usedPercent"] as? NSNumber)?.doubleValue == 100)
+        #expect(models[0]["resetsAt"] as? String == "2026-10-01T00:00:00Z")
+        #expect(models[1]["model"] as? String == "glm5.3")
+        #expect(models[1]["quotaTokens"] is NSNull && models[1]["usedPercent"] is NSNull && models[1]["resetsAt"] is NSNull)
+        #expect(!String(decoding: try JSONEncoder().encode(withUsage), as: UTF8.self).contains(secret))
     }
 
     @Test("Status usage includes ISO UTC dates and per-login failures")
