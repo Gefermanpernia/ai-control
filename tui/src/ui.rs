@@ -3,7 +3,7 @@ use crate::{
     status::Usage,
 };
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -11,11 +11,11 @@ use ratatui::{
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-fn relative(timestamp: &str) -> String {
+fn relative(timestamp: &str, now: OffsetDateTime) -> String {
     let Ok(date) = OffsetDateTime::parse(timestamp, &Rfc3339) else {
         return "?".into();
     };
-    let seconds = (date - OffsetDateTime::now_utc()).whole_seconds();
+    let seconds = (date - now).whole_seconds();
     if seconds <= 0 {
         "now".into()
     } else if seconds < 3600 {
@@ -26,37 +26,56 @@ fn relative(timestamp: &str) -> String {
         format!("{}d", (seconds + 86399) / 86400)
     }
 }
-fn usage(usage: &Usage) -> String {
-    let mut text = usage
-        .windows
-        .iter()
-        .map(|w| {
-            let pct = if w.used_percent.is_finite() {
-                w.used_percent.clamp(0.0, 100.0)
+fn login_line(
+    prefix: String,
+    selected: bool,
+    usage: Option<&Usage>,
+    now: OffsetDateTime,
+) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        prefix,
+        if selected {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default()
+        },
+    )];
+    if let Some(usage) = usage {
+        for window in &usage.windows {
+            let pct = if window.used_percent.is_finite() {
+                window.used_percent.clamp(0.0, 100.0)
             } else {
                 0.0
             };
+            let color = if pct >= 90.0 {
+                Color::Red
+            } else if pct >= 70.0 {
+                Color::Yellow
+            } else {
+                Color::Reset
+            };
             let filled = (pct / 20.0).round() as usize;
-            format!(
-                "{} {}{} {:.0}%{}",
-                w.label,
-                "█".repeat(filled),
-                "░".repeat(5 - filled),
-                pct,
-                w.resets_at
-                    .as_ref()
-                    .map(|t| format!(" ↻{}", relative(t)))
-                    .unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("  ");
-    if let Some(count) = usage.resets_available {
-        text.push_str(&format!("  {count} resets"));
+            spans.push(Span::raw(format!("  {} ", window.label)));
+            spans.push(Span::styled(
+                format!(
+                    "{}{} {:.0}%",
+                    "█".repeat(filled),
+                    "░".repeat(5 - filled),
+                    pct
+                ),
+                Style::default().fg(color),
+            ));
+            if let Some(reset) = &window.resets_at {
+                spans.push(Span::raw(format!(" ↻{}", relative(reset, now))));
+            }
+        }
+        if let Some(count) = usage.resets_available {
+            spans.push(Span::raw(format!("  {count} resets")));
+        }
     }
-    text
+    Line::from(spans)
 }
-fn rows(app: &App, provider: usize) -> Vec<Line<'static>> {
+fn rows(app: &App, provider: usize, now: OffsetDateTime) -> Vec<Line<'static>> {
     if !app.status_loaded {
         return vec![Line::from("Loading…")];
     }
@@ -74,8 +93,8 @@ fn rows(app: &App, provider: usize) -> Vec<Line<'static>> {
                 " "
             };
             let selected = provider == app.provider && i == app.positions[0];
-            let mut line = format!(
-                "{} {}{}{}",
+            let line = format!(
+                "{} {} {}{}",
                 if selected { ">" } else { " " },
                 mark,
                 l.name,
@@ -85,17 +104,7 @@ fn rows(app: &App, provider: usize) -> Vec<Line<'static>> {
                     ""
                 }
             );
-            if let Some(u) = &l.usage {
-                line.push_str(&format!("  {}", usage(u)));
-            }
-            lines.push(Line::from(Span::styled(
-                line,
-                if selected {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default()
-                },
-            )));
+            lines.push(login_line(line, selected, l.usage.as_ref(), now));
             if let Some(error) = &l.usage_error {
                 lines.push(Line::from(Span::styled(
                     format!("  {error}"),
@@ -116,8 +125,8 @@ fn rows(app: &App, provider: usize) -> Vec<Line<'static>> {
                 " "
             };
             let selected = provider == app.provider && i == app.positions[1];
-            let mut line = format!(
-                "{} {}{}{}",
+            let line = format!(
+                "{} {} {}{}",
                 if selected { ">" } else { " " },
                 mark,
                 l.name,
@@ -126,17 +135,7 @@ fn rows(app: &App, provider: usize) -> Vec<Line<'static>> {
                     .map(|e| format!(" · {e}"))
                     .unwrap_or_default()
             );
-            if let Some(u) = &l.usage {
-                line.push_str(&format!("  {}", usage(u)));
-            }
-            lines.push(Line::from(Span::styled(
-                line,
-                if selected {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default()
-                },
-            )));
+            lines.push(login_line(line, selected, l.usage.as_ref(), now));
             if let Some(error) = &l.usage_error {
                 lines.push(Line::from(Span::styled(
                     format!("  {error}"),
@@ -151,20 +150,33 @@ fn rows(app: &App, provider: usize) -> Vec<Line<'static>> {
     lines
 }
 pub fn draw(frame: &mut Frame, app: &App) {
+    draw_at(frame, app, OffsetDateTime::now_utc());
+}
+pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
     let size = frame.area();
     if size.width < 2 || size.height < 3 {
         return;
     }
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(45),
-            Constraint::Percentage(45),
-            Constraint::Min(2),
-        ])
-        .split(size);
+    let footer_height = size.height.min(2);
+    let available = size.height - footer_height;
+    let desired = [rows(app, 0, now).len(), rows(app, 1, now).len()].map(|lines| {
+        u16::try_from(lines.saturating_add(2))
+            .unwrap_or(u16::MAX)
+            .max(3)
+    });
+    let mut heights = [desired[0].min(available), 0];
+    if desired[0].saturating_add(desired[1]) > available {
+        heights[0] = (available / 2)
+            .max(available.saturating_sub(desired[1]))
+            .min(available.saturating_sub(2));
+    }
+    heights[1] = desired[1].min(available - heights[0]);
+    let areas = [
+        Rect::new(size.x, size.y, size.width, heights[0]),
+        Rect::new(size.x, size.y + heights[0], size.width, heights[1]),
+    ];
     for (i, title) in ["Claude", "Codex"].iter().enumerate() {
-        let area = chunks[i];
+        let area = areas[i];
         if area.height < 2 {
             continue;
         }
@@ -193,7 +205,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             .saturating_add(1)
             .saturating_sub(usize::from(area.height.saturating_sub(2)));
         frame.render_widget(
-            Paragraph::new(rows(app, i))
+            Paragraph::new(rows(app, i, now))
                 .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0))
                 .block(
                     Block::default()
@@ -204,9 +216,19 @@ pub fn draw(frame: &mut Frame, app: &App) {
             area,
         );
     }
-    footer(frame, chunks[2], app);
+    footer(
+        frame,
+        Rect::new(
+            size.x,
+            size.bottom() - footer_height,
+            size.width,
+            footer_height,
+        ),
+        app,
+        now,
+    );
 }
-fn footer(frame: &mut Frame, area: Rect, app: &App) {
+fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
     let prompt = match app.mode {
         Mode::Normal => match app.loading {
             Some(Loading::Usage) => "Loading usage…".into(),
@@ -221,7 +243,21 @@ fn footer(frame: &mut Frame, area: Rect, app: &App) {
         Mode::AddAlias => format!("Alias: {}", app.input),
         Mode::AddEmail => format!("Claude email (optional): {}", app.input),
     };
-    let updated = app.updated.as_deref().unwrap_or("not yet loaded");
+    let updated = app
+        .updated
+        .map(|loaded| {
+            let elapsed = (now - loaded).whole_seconds().max(0);
+            if elapsed < 60 {
+                "just now".to_string()
+            } else if elapsed < 3600 {
+                format!("{} min ago", elapsed / 60)
+            } else if elapsed < 86400 {
+                format!("{} h ago", elapsed / 3600)
+            } else {
+                format!("{} d ago", elapsed / 86400)
+            }
+        })
+        .unwrap_or_else(|| "not yet loaded".into());
     let style = if app.mode == Mode::Normal
         && app.loading != Some(Loading::Usage)
         && app.action_success == Some(false)
@@ -237,7 +273,116 @@ fn footer(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use super::*;
     use crate::{app::Loading, status::parse};
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+
+    fn rendered(app: &App, width: u16, height: u16, now: OffsetDateTime) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| draw_at(frame, app, now)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn row(buffer: &Buffer, y: u16) -> String {
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect()
+    }
+
+    #[test]
+    fn marked_and_unmarked_names_align() {
+        let status = parse(r#"{"version":1,"claude":{"available":true,"selected":"personal","logins":[{"name":"personal","needsLogin":false},{"name":"work","needsLogin":false}]},"codex":{"available":true,"inUse":"personal","logins":[{"name":"personal"},{"name":"work"}]} }"#).unwrap();
+        let app = App::new(status);
+        let buffer = rendered(&app, 120, 20, OffsetDateTime::UNIX_EPOCH);
+        for (marked, unmarked) in [(1, 2), (5, 6)] {
+            let marked = row(&buffer, marked);
+            let unmarked = row(&buffer, unmarked);
+            assert_eq!(
+                marked.chars().position(|c| c == 'p'),
+                unmarked.chars().position(|c| c == 'w')
+            );
+            assert!(marked.contains("● personal"));
+        }
+        assert!(row(&buffer, 1).contains("> ● personal"));
+    }
+
+    #[test]
+    fn footer_uses_relative_successful_load_time() {
+        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(20);
+        let mut app = App::new(parse(r#"{"version":1,"claude":{"available":false,"logins":[]},"codex":{"available":false,"logins":[]}}"#).unwrap());
+        assert!(row(&rendered(&app, 120, 12, now), 10).contains("updated not yet loaded"));
+        for (age, expected) in [
+            (time::Duration::seconds(30), "updated just now"),
+            (time::Duration::minutes(5), "updated 5 min ago"),
+            (time::Duration::hours(3), "updated 3 h ago"),
+            (time::Duration::days(2), "updated 2 d ago"),
+        ] {
+            app.updated = Some(now - age);
+            assert!(
+                row(&rendered(&app, 120, 12, now), 10).contains(expected),
+                "{expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn usage_bars_and_percentages_keep_level_color_on_selected_row() {
+        let status = parse(r#"{"version":1,"claude":{"available":true,"logins":[{"name":"levels","needsLogin":false,"usage":{"windows":[{"label":"a","usedPercent":69},{"label":"b","usedPercent":70},{"label":"c","usedPercent":89},{"label":"d","usedPercent":90}],"fetchedAt":"2026-01-01T00:00:00Z"}}]},"codex":{"available":false,"logins":[]}}"#).unwrap();
+        let app = App::new(status);
+        let buffer = rendered(&app, 120, 12, OffsetDateTime::UNIX_EPOCH);
+        let line = row(&buffer, 1);
+        let name = line.find("levels").unwrap() as u16;
+        assert_eq!(buffer[(name, 1)].fg, Color::Cyan);
+        for (label, percent, expected) in [
+            ("a", "69%", Color::Reset),
+            ("b", "70%", Color::Yellow),
+            ("c", "89%", Color::Yellow),
+            ("d", "90%", Color::Red),
+        ] {
+            let start = line.find(&format!("{label} ")).unwrap() + 2;
+            let bar_column = line[..start].chars().count() as u16;
+            let pct_column = line[..line.find(percent).unwrap()].chars().count() as u16;
+            assert_eq!(buffer[(bar_column, 1)].fg, expected, "{label} bar");
+            assert_eq!(buffer[(pct_column, 1)].fg, expected, "{label} percentage");
+        }
+    }
+
+    #[test]
+    fn provider_boxes_fit_content_and_preserve_space_below() {
+        let claude = (0..3)
+            .map(|i| format!(r#"{{"name":"claude-{i}","needsLogin":false}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let codex = (0..2)
+            .map(|i| format!(r#"{{"name":"codex-{i}"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let app = App::new(parse(&format!(r#"{{"version":1,"claude":{{"available":true,"logins":[{claude}]}},"codex":{{"available":true,"logins":[{codex}]}}}}"#)).unwrap());
+        let buffer = rendered(&app, 120, 30, OffsetDateTime::UNIX_EPOCH);
+        assert!(row(&buffer, 4).starts_with('└'));
+        assert!(row(&buffer, 5).starts_with('┌'));
+        assert!(row(&buffer, 8).starts_with('└'));
+        assert_eq!(buffer[(0, 9)].symbol(), " ");
+        assert!(row(&buffer, 28).contains("updated"));
+    }
+
+    #[test]
+    fn cramped_boxes_stay_visible_and_scroll_selected_login() {
+        let claude = (0..12)
+            .map(|i| format!(r#"{{"name":"claude-{i}","needsLogin":false}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let codex = (0..12)
+            .map(|i| format!(r#"{{"name":"codex-{i}"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut app = App::new(parse(&format!(r#"{{"version":1,"claude":{{"available":true,"logins":[{claude}]}},"codex":{{"available":true,"logins":[{codex}]}}}}"#)).unwrap());
+        app.positions = [11, 11];
+        let buffer = rendered(&app, 80, 12, OffsetDateTime::UNIX_EPOCH);
+        let lines = (0..12).map(|y| row(&buffer, y)).collect::<Vec<_>>();
+        assert!(lines.iter().any(|line| line.contains("Claude")));
+        assert!(lines.iter().any(|line| line.contains("Codex")));
+        assert!(lines.iter().any(|line| line.contains(">   claude-11")));
+        assert!(lines.iter().any(|line| line.contains("codex-11")));
+    }
     #[test]
     fn snapshot_and_narrow() {
         let s = r#"{"version":1,"claude":{"available":true,"selected":"one","logins":[{"name":"one","needsLogin":false,"usage":{"windows":[{"label":"5h","usedPercent":25,"resetsAt":null}],"resetsAvailable":null,"fetchedAt":"2026-09-26T00:00:00Z"},"usageError":null}]},"codex":{"available":false,"inUse":null,"logins":[]}}"#;
@@ -308,12 +453,12 @@ mod tests {
     #[test]
     fn selected_fifth_login_remains_visible() {
         let screen = login_screen(5, false, 4);
-        assert!(screen.iter().any(|row| row.contains(">  login-4")));
+        assert!(screen.iter().any(|row| row.contains(">   login-4")));
     }
     #[test]
     fn selected_login_with_usage_errors_remains_visible() {
         let screen = login_screen(5, true, 4);
-        assert!(screen.iter().any(|row| row.contains(">  login-4")));
+        assert!(screen.iter().any(|row| row.contains(">   login-4")));
     }
     #[test]
     fn inactive_provider_keeps_its_own_cursor_visible() {

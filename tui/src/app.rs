@@ -48,7 +48,7 @@ pub struct App {
     pub action_success: Option<bool>,
     pub loading: Option<Loading>,
     pub status_loaded: bool,
-    pub updated: Option<String>,
+    pub updated: Option<time::OffsetDateTime>,
 }
 impl App {
     pub fn new(status: Status) -> Self {
@@ -165,11 +165,7 @@ impl App {
         self.status = status;
         self.status_loaded = true;
         self.loading = None;
-        self.updated = Some(
-            time::OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_else(|_| "unknown".into()),
-        );
+        self.updated = Some(time::OffsetDateTime::now_utc());
     }
     pub fn key(&mut self, key: Key) -> Effect {
         match self.mode {
