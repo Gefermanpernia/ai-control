@@ -246,6 +246,63 @@ fn action_result_preserves_success_or_failure() {
     assert_eq!(app.action_success, Some(false));
 }
 
+const MONITORS: &str = r#"{"version":1,"claude":{"available":true,"logins":[]},"codex":{"available":true,"logins":[]},"monitors":[{"id":"opencode-go","name":"OpenCode Go","usage":{"windows":[{"label":"5h","usedPercent":62,"resetsAt":null}],"fetchedAt":"2026-01-01T00:00:00Z"},"models":null,"error":"old"},{"id":"nan","name":"NaN","usage":null,"models":[{"model":"glm5.3","totalTokens":1200000000,"quotaTokens":null,"usedPercent":null,"resetsAt":null}],"error":null}]}"#;
+
+#[test]
+fn parses_optional_monitors_and_model_usage() {
+    assert!(parse(SAMPLE).unwrap().monitors.is_empty());
+    let status = parse(MONITORS).unwrap();
+    assert_eq!(status.monitors.len(), 2);
+    assert_eq!(
+        status.monitors[0].usage.as_ref().unwrap().windows[0].used_percent,
+        62.0
+    );
+    assert_eq!(
+        status.monitors[1].models.as_ref().unwrap()[0].total_tokens,
+        1_200_000_000
+    );
+}
+
+#[test]
+fn plain_reload_carries_monitor_data_by_id_and_usage_reload_replaces_it() {
+    let mut app = App::new(parse(MONITORS).unwrap());
+    let plain = parse(r#"{"version":1,"claude":{"available":true,"logins":[]},"codex":{"available":true,"logins":[]},"monitors":[{"id":"nan","name":"renamed NaN","usage":null,"models":null,"error":null},{"id":"new","name":"New","usage":null,"models":null,"error":null},{"id":"opencode-go","name":"Go","usage":null,"models":null,"error":null}]}"#).unwrap();
+    app.apply_status(plain, false);
+    assert_eq!(app.status.monitors[0].name, "renamed NaN");
+    assert_eq!(
+        app.status.monitors[0].models.as_ref().unwrap()[0].total_tokens,
+        1_200_000_000
+    );
+    assert!(app.status.monitors[1].models.is_none());
+    assert_eq!(
+        app.status.monitors[2].usage.as_ref().unwrap().windows[0].used_percent,
+        62.0
+    );
+    assert_eq!(app.status.monitors[2].error.as_deref(), Some("old"));
+    app.apply_status(parse(MONITORS).unwrap(), true);
+    assert_eq!(app.status.monitors[0].name, "OpenCode Go");
+    assert_eq!(
+        app.status.monitors[0].usage.as_ref().unwrap().windows[0].used_percent,
+        62.0
+    );
+    assert_eq!(app.status.monitors[0].error.as_deref(), Some("old"));
+    assert!(app.status.monitors[1].error.is_none());
+}
+
+#[test]
+fn tab_skips_read_only_monitors() {
+    let mut app = App::new(parse(MONITORS).unwrap());
+    for expected in [1, 0, 1, 0] {
+        assert_eq!(app.key(Key::Tab), Effect::None);
+        assert_eq!(app.provider, expected);
+    }
+    let mut status = parse(MONITORS).unwrap();
+    status.codex.installed = false;
+    let mut app = App::new(status);
+    app.key(Key::Tab);
+    assert_eq!(app.provider, 0);
+}
+
 const CLAUDE_ONLY: &str = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":false,"logins":[]}}"#;
 const CODEX_ONLY: &str = r#"{"version":1,"claude":{"available":true,"installed":false,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]}}"#;
 

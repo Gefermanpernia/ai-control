@@ -1,6 +1,6 @@
 use crate::{
     app::{App, Loading, Mode},
-    status::Usage,
+    status::{Monitor, Usage},
 };
 use ratatui::{
     layout::Rect,
@@ -26,6 +26,38 @@ fn relative(timestamp: &str, now: OffsetDateTime) -> String {
         format!("{}d", (seconds + 86399) / 86400)
     }
 }
+fn usage_bar(
+    spans: &mut Vec<Span<'static>>,
+    percent: f64,
+    reset: Option<&str>,
+    now: OffsetDateTime,
+) {
+    let pct = if percent.is_finite() {
+        percent.clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let color = if pct >= 90.0 {
+        Color::Red
+    } else if pct >= 75.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+    let filled = (pct / 20.0).round() as usize;
+    spans.push(Span::styled(
+        format!(
+            "{}{} {:.0}%",
+            "█".repeat(filled),
+            "░".repeat(5 - filled),
+            pct
+        ),
+        Style::default().fg(color),
+    ));
+    if let Some(reset) = reset {
+        spans.push(Span::raw(format!(" ↻{}", relative(reset, now))));
+    }
+}
 fn login_line(
     prefix: String,
     selected: bool,
@@ -42,38 +74,80 @@ fn login_line(
     )];
     if let Some(usage) = usage {
         for window in &usage.windows {
-            let pct = if window.used_percent.is_finite() {
-                window.used_percent.clamp(0.0, 100.0)
-            } else {
-                0.0
-            };
-            let color = if pct >= 90.0 {
-                Color::Red
-            } else if pct >= 75.0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
-            let filled = (pct / 20.0).round() as usize;
             spans.push(Span::raw(format!("  {} ", window.label)));
-            spans.push(Span::styled(
-                format!(
-                    "{}{} {:.0}%",
-                    "█".repeat(filled),
-                    "░".repeat(5 - filled),
-                    pct
-                ),
-                Style::default().fg(color),
-            ));
-            if let Some(reset) = &window.resets_at {
-                spans.push(Span::raw(format!(" ↻{}", relative(reset, now))));
-            }
+            usage_bar(
+                &mut spans,
+                window.used_percent,
+                window.resets_at.as_deref(),
+                now,
+            );
         }
         if let Some(count) = usage.resets_available {
             spans.push(Span::raw(format!("  {count} resets")));
         }
     }
     Line::from(spans)
+}
+fn compact_tokens(tokens: i64) -> String {
+    let magnitude = tokens.unsigned_abs();
+    let (divisor, suffix) = if magnitude >= 1_000_000_000 {
+        (1_000_000_000, "B")
+    } else if magnitude >= 1_000_000 {
+        (1_000_000, "M")
+    } else if magnitude >= 1_000 {
+        (1_000, "K")
+    } else {
+        return tokens.to_string();
+    };
+    let scaled = tokens as f64 / divisor as f64;
+    if (scaled * 10.0).round() % 10.0 == 0.0 {
+        format!("{scaled:.0}{suffix}")
+    } else {
+        format!("{scaled:.1}{suffix}")
+    }
+}
+fn monitor_rows(monitors: &[Monitor], now: OffsetDateTime) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for monitor in monitors {
+        // Four columns, like the marker and cursor columns of the login rows, so names line up.
+        let mut spans = vec![Span::raw(format!("    {}", monitor.name))];
+        if let Some(error) = &monitor.error {
+            spans.push(Span::styled(
+                format!(" · {error}"),
+                Style::default().add_modifier(Modifier::DIM),
+            ));
+        }
+        if let Some(usage) = &monitor.usage {
+            for window in &usage.windows {
+                spans.push(Span::raw(format!("  {} ", window.label)));
+                usage_bar(
+                    &mut spans,
+                    window.used_percent,
+                    window.resets_at.as_deref(),
+                    now,
+                );
+            }
+        }
+        lines.push(Line::from(spans));
+        if let Some(models) = &monitor.models {
+            if models.is_empty() {
+                lines.push(Line::from("      no usage this month"));
+            }
+            for model in models {
+                let mut spans = vec![Span::raw(format!("      {}  ", model.model))];
+                if let Some(percent) = model.used_percent {
+                    usage_bar(&mut spans, percent, model.resets_at.as_deref(), now);
+                } else {
+                    spans.push(Span::raw(format!(
+                        "{} tokens",
+                        compact_tokens(model.total_tokens)
+                    )));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+    }
+    lines
 }
 fn rows(app: &App, provider: usize, now: OffsetDateTime) -> Vec<Line<'static>> {
     if !app.status_loaded {
@@ -241,6 +315,20 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
             area,
         );
     }
+    if !app.status.monitors.is_empty() {
+        let remaining = size.y.saturating_add(available).saturating_sub(top);
+        if remaining >= 3 {
+            let lines = monitor_rows(&app.status.monitors, now);
+            let height = u16::try_from(lines.len().saturating_add(2))
+                .unwrap_or(u16::MAX)
+                .min(remaining);
+            frame.render_widget(
+                Paragraph::new(lines)
+                    .block(Block::default().title("Monitors").borders(Borders::ALL)),
+                Rect::new(size.x, top, size.width, height),
+            );
+        }
+    }
     footer(
         frame,
         Rect::new(
@@ -311,6 +399,75 @@ mod tests {
         (0..buffer.area.width)
             .map(|x| buffer[(x, y)].symbol())
             .collect()
+    }
+
+    const MONITOR_STATUS: &str = r#"{"version":1,"claude":{"available":true,"logins":[]},"codex":{"available":true,"logins":[]},"monitors":[{"id":"opencode-go","name":"OpenCode Go","usage":{"windows":[{"label":"5h","usedPercent":62,"resetsAt":"1970-01-01T02:00:00Z"},{"label":"Week","usedPercent":90,"resetsAt":null},{"label":"Month","usedPercent":75,"resetsAt":null}],"fetchedAt":"1970-01-01T00:00:00Z"},"models":null,"error":"The OpenCode Go key was rejected."},{"id":"nan","name":"NaN","usage":null,"models":[{"model":"glm5.3-flash","totalTokens":950000,"quotaTokens":1500000,"usedPercent":62,"resetsAt":"1970-01-05T00:00:00Z"},{"model":"glm5.3","totalTokens":1200000000,"quotaTokens":null,"usedPercent":null,"resetsAt":null},{"model":"small","totalTokens":950000,"quotaTokens":null,"usedPercent":null,"resetsAt":null},{"model":"large","totalTokens":3000000000,"quotaTokens":null,"usedPercent":null,"resetsAt":null}],"error":null}]}"#;
+
+    #[test]
+    fn monitors_render_windows_models_and_dimmed_error() {
+        let app = App::new(parse(MONITOR_STATUS).unwrap());
+        let buffer = rendered(&app, 140, 18, OffsetDateTime::UNIX_EPOCH);
+        let lines: Vec<_> = (0..18).map(|y| row(&buffer, y)).collect();
+        let text = lines.join("\n");
+        assert!(text.contains("Monitors"), "{text}");
+        assert!(
+            text.contains("OpenCode Go · The OpenCode Go key was rejected."),
+            "{text}"
+        );
+        assert!(text.contains("5h ███░░ 62% ↻2h"), "{text}");
+        assert!(text.contains("Week █████ 90%"));
+        assert!(text.contains("Month ████░ 75%"));
+        assert!(text.contains("  glm5.3-flash  ███░░ 62% ↻4d"), "{text}");
+        for fragment in [
+            "glm5.3  1.2B tokens",
+            "small  950K tokens",
+            "large  3B tokens",
+        ] {
+            assert!(text.contains(fragment), "{fragment}: {text}");
+        }
+        let go_y = lines
+            .iter()
+            .position(|line| line.contains("OpenCode Go"))
+            .unwrap() as u16;
+        let go = &lines[go_y as usize];
+        let column = |needle: &str| go[..go.find(needle).unwrap()].chars().count() as u16;
+        assert!(buffer[(column("The OpenCode"), go_y)]
+            .modifier
+            .contains(Modifier::DIM));
+        assert_eq!(buffer[(column("62%"), go_y)].fg, Color::Green);
+        assert_eq!(buffer[(column("90%"), go_y)].fg, Color::Red);
+        assert_eq!(buffer[(column("75%"), go_y)].fg, Color::Yellow);
+    }
+
+    #[test]
+    fn empty_models_and_missing_usage_are_distinct() {
+        let status = MONITOR_STATUS.replace("\"models\":[{\"model\":\"glm5.3-flash\",\"totalTokens\":950000,\"quotaTokens\":1500000,\"usedPercent\":62,\"resetsAt\":\"1970-01-05T00:00:00Z\"},{\"model\":\"glm5.3\",\"totalTokens\":1200000000,\"quotaTokens\":null,\"usedPercent\":null,\"resetsAt\":null},{\"model\":\"small\",\"totalTokens\":950000,\"quotaTokens\":null,\"usedPercent\":null,\"resetsAt\":null},{\"model\":\"large\",\"totalTokens\":3000000000,\"quotaTokens\":null,\"usedPercent\":null,\"resetsAt\":null}]", "\"models\":[]");
+        let app = App::new(parse(&status).unwrap());
+        let buffer = rendered(&app, 100, 16, OffsetDateTime::UNIX_EPOCH);
+        assert!((0..16).any(|y| row(&buffer, y).contains("  no usage this month")));
+        let plain = App::new(parse(r#"{"version":1,"claude":{"available":true,"logins":[]},"codex":{"available":true,"logins":[]},"monitors":[{"id":"plain","name":"Plain","usage":null,"models":null,"error":null}]}"#).unwrap());
+        let buffer = rendered(&plain, 100, 12, OffsetDateTime::UNIX_EPOCH);
+        assert!((0..12).any(|y| row(&buffer, y).contains("Plain")));
+        assert!(!(0..12).any(|y| row(&buffer, y).contains("no usage this month")));
+    }
+
+    #[test]
+    fn monitors_respect_provider_priority_and_narrow_terminals() {
+        let app = App::new(parse(MONITOR_STATUS).unwrap());
+        let empty = App::new(parse(r#"{"version":1,"claude":{"available":true,"logins":[]},"codex":{"available":true,"logins":[]}}"#).unwrap());
+        let large = rendered(&app, 120, 18, OffsetDateTime::UNIX_EPOCH);
+        let bottom = (0..18)
+            .find(|&y| row(&large, y).contains("Monitors"))
+            .unwrap();
+        assert!(bottom >= 6);
+        assert!(!(0..18).any(
+            |y| row(&rendered(&empty, 120, 18, OffsetDateTime::UNIX_EPOCH), y).contains("Monitors")
+        ));
+        let cramped = rendered(&app, 120, 8, OffsetDateTime::UNIX_EPOCH);
+        assert!(!(0..8).any(|y| row(&cramped, y).contains("Monitors")));
+        for width in [1, 2, 9, 20] {
+            let _ = rendered(&app, width, 12, OffsetDateTime::UNIX_EPOCH);
+        }
     }
 
     #[test]

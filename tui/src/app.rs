@@ -186,6 +186,14 @@ impl App {
                     login.usage_error = previous.usage_error.clone();
                 }
             }
+            for monitor in &mut status.monitors {
+                if let Some(previous) = self.status.monitors.iter().find(|old| old.id == monitor.id)
+                {
+                    monitor.usage = previous.usage.clone();
+                    monitor.models = previous.models.clone();
+                    monitor.error = previous.error.clone();
+                }
+            }
         }
         fn follow<T>(old: &[T], new: &[T], index: usize, name: impl Fn(&T) -> &str) -> usize {
             let selected = old.get(index).map(&name);

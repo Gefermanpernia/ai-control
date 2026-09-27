@@ -43,10 +43,29 @@ pub struct Provider<T> {
     pub in_use: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsage {
+    pub model: String,
+    pub total_tokens: i64,
+    pub quota_tokens: Option<i64>,
+    pub used_percent: Option<f64>,
+    pub resets_at: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Monitor {
+    pub id: String,
+    pub name: String,
+    pub usage: Option<Usage>,
+    pub models: Option<Vec<ModelUsage>>,
+    pub error: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize)]
 pub struct Status {
     pub version: u32,
     pub claude: Provider<ClaudeLogin>,
     pub codex: Provider<CodexLogin>,
+    #[serde(default)]
+    pub monitors: Vec<Monitor>,
 }
 fn installed_by_default() -> bool {
     true
