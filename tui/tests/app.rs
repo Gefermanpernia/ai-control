@@ -1,0 +1,247 @@
+use aic_tui::{
+    app::{App, Effect, Key, Mode},
+    status::{parse, Status},
+};
+
+const SAMPLE: &str = r#"{"version":1,"claude":{"available":true,"selected":"home","logins":[{"name":"home","needsLogin":false,"usage":{"windows":[{"label":"5h","usedPercent":25.0,"resetsAt":"2026-09-27T00:00:00Z"}],"resetsAvailable":null,"fetchedAt":"2026-09-26T00:00:00Z"},"usageError":null}]},"codex":{"available":true,"inUse":null,"logins":[{"name":"work","email":null,"usage":null,"usageError":"offline"}]}}"#;
+const TWO_LOGINS: &str = r#"{"version":1,"claude":{"available":true,"logins":[{"name":"a","needsLogin":false},{"name":"b","needsLogin":false}]},"codex":{"available":true,"logins":[{"name":"a","email":null},{"name":"b","email":null}]}}"#;
+fn app() -> App {
+    App::new(parse(SAMPLE).unwrap())
+}
+fn two_logins() -> App {
+    App::new(parse(TWO_LOGINS).unwrap())
+}
+fn reordered() -> Status {
+    let mut status = parse(TWO_LOGINS).unwrap();
+    status.claude.logins.swap(0, 1);
+    status.codex.logins.swap(0, 1);
+    status
+}
+fn type_text(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        app.key(Key::Char(ch));
+    }
+}
+
+#[test]
+fn movement_and_tab_keep_independent_selection() {
+    let mut app = app();
+    app.key(Key::Down);
+    assert_eq!(app.positions[0], 0);
+    app.key(Key::Tab);
+    assert_eq!(app.provider, 1);
+    app.key(Key::Down);
+    assert_eq!(app.positions, [0, 0]);
+}
+#[test]
+fn enter_requires_confirmation_to_switch() {
+    let mut app = app();
+    app.key(Key::Enter);
+    assert_eq!(app.mode, Mode::Confirm);
+    assert_eq!(
+        app.key(Key::Char('y')),
+        Effect::Action {
+            provider: "claude-login",
+            verb: "use",
+            alias: "home".into(),
+            extra: None
+        }
+    );
+}
+#[test]
+fn confirm_target_survives_reorder_and_cursor_change() {
+    let mut app = two_logins();
+    app.key(Key::Down);
+    app.key(Key::Enter);
+    app.apply_status(reordered(), false);
+    app.positions[0] = 1;
+    assert!(
+        matches!(app.key(Key::Char('y')), Effect::Action { verb: "use", alias, .. } if alias == "b")
+    );
+}
+#[test]
+fn rename_target_survives_reorder_and_cursor_change() {
+    let mut app = two_logins();
+    app.key(Key::Down);
+    app.key(Key::Char('n'));
+    type_text(&mut app, "new_b");
+    app.apply_status(reordered(), false);
+    app.positions[0] = 1;
+    assert!(
+        matches!(app.key(Key::Enter), Effect::Action { verb: "rename", alias, extra: Some(new), .. } if alias == "b" && new == "new_b")
+    );
+}
+#[test]
+fn missing_confirm_target_does_not_emit_action() {
+    let mut app = two_logins();
+    app.key(Key::Down);
+    app.key(Key::Enter);
+    let mut removed = parse(TWO_LOGINS).unwrap();
+    removed.claude.logins.pop();
+    app.apply_status(removed, false);
+    assert_eq!(app.key(Key::Char('y')), Effect::None);
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.action_success, Some(false));
+    assert!(app.message.contains("no longer saved"));
+}
+#[test]
+fn status_reorder_keeps_both_provider_cursors_on_login_names() {
+    let mut app = two_logins();
+    app.positions = [1, 1];
+    app.apply_status(reordered(), false);
+    assert_eq!(app.positions, [0, 0]);
+    assert_eq!(app.name(), Some("b"));
+}
+#[test]
+fn non_yes_confirmation_cancels_without_action() {
+    let mut app = app();
+    app.key(Key::Enter);
+    assert_eq!(app.key(Key::Char('n')), Effect::None);
+    assert_eq!(app.mode, Mode::Normal);
+}
+#[test]
+fn rename_rejects_empty_and_invalid_alias_then_accepts_valid() {
+    let mut app = app();
+    app.key(Key::Tab);
+    app.key(Key::Char('n'));
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    assert!(app.message.contains("Invalid alias"));
+    type_text(&mut app, "Bad!");
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    assert!(app.message.contains("Invalid alias"));
+    for _ in 0..4 {
+        app.key(Key::Backspace);
+    }
+    type_text(&mut app, "valid_1");
+    assert_eq!(
+        app.key(Key::Enter),
+        Effect::Action {
+            provider: "codex-login",
+            verb: "rename",
+            alias: "work".into(),
+            extra: Some("valid_1".into())
+        }
+    );
+}
+#[test]
+fn add_rejects_empty_and_invalid_alias_then_accepts_valid() {
+    let mut app = app();
+    app.key(Key::Tab);
+    app.key(Key::Char('a'));
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    type_text(&mut app, "BAD");
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    for _ in 0..3 {
+        app.key(Key::Backspace);
+    }
+    type_text(&mut app, "new-login");
+    assert_eq!(
+        app.key(Key::Enter),
+        Effect::Action {
+            provider: "codex-login",
+            verb: "add",
+            alias: "new-login".into(),
+            extra: None
+        }
+    );
+}
+#[test]
+fn escape_cancels_rename_and_add_and_clears_input() {
+    let mut app = app();
+    for start in ['n', 'a'] {
+        app.key(Key::Char(start));
+        type_text(&mut app, "draft");
+        app.key(Key::Esc);
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.input.is_empty());
+    }
+}
+#[test]
+fn claude_add_forwards_optional_email() {
+    let mut app = app();
+    app.key(Key::Char('a'));
+    type_text(&mut app, "new");
+    app.key(Key::Enter);
+    assert_eq!(app.mode, Mode::AddEmail);
+    type_text(&mut app, "hello@example.test");
+    assert_eq!(
+        app.key(Key::Enter),
+        Effect::Action {
+            provider: "claude-login",
+            verb: "add",
+            alias: "new".into(),
+            extra: Some("hello@example.test".into())
+        }
+    );
+}
+#[test]
+fn claude_add_skips_empty_email() {
+    let mut app = app();
+    app.key(Key::Char('a'));
+    type_text(&mut app, "new");
+    app.key(Key::Enter);
+    assert_eq!(
+        app.key(Key::Enter),
+        Effect::Action {
+            provider: "claude-login",
+            verb: "add",
+            alias: "new".into(),
+            extra: None
+        }
+    );
+}
+#[test]
+fn plain_status_carries_matching_usage_and_error_but_not_removed_logins() {
+    let mut app = app();
+    let plain = parse(&SAMPLE.replace("\"usage\":{\"windows\":[{\"label\":\"5h\",\"usedPercent\":25.0,\"resetsAt\":\"2026-09-27T00:00:00Z\"}],\"resetsAvailable\":null,\"fetchedAt\":\"2026-09-26T00:00:00Z\"}", "\"usage\":null").replace("\"usageError\":\"offline\"", "\"usageError\":null")).unwrap();
+    app.apply_status(plain, false);
+    assert_eq!(
+        app.status.claude.logins[0].usage.as_ref().unwrap().windows[0].used_percent,
+        25.0
+    );
+    assert_eq!(
+        app.status.codex.logins[0].usage_error.as_deref(),
+        Some("offline")
+    );
+    let removed = parse(&SAMPLE.replace(
+        "\"logins\":[{\"name\":\"work\",\"email\":null,\"usage\":null,\"usageError\":\"offline\"}]",
+        "\"logins\":[]",
+    ))
+    .unwrap();
+    app.apply_status(removed, false);
+    assert!(app.status.codex.logins.is_empty());
+}
+#[test]
+fn usage_reload_replaces_previous_usage_and_error() {
+    let mut app = app();
+    let replacement = parse(
+        &SAMPLE
+            .replace("\"usedPercent\":25.0", "\"usedPercent\":70.0")
+            .replace("\"usageError\":\"offline\"", "\"usageError\":null"),
+    )
+    .unwrap();
+    app.apply_status(replacement, true);
+    assert_eq!(
+        app.status.claude.logins[0].usage.as_ref().unwrap().windows[0].used_percent,
+        70.0
+    );
+    assert!(app.status.codex.logins[0].usage_error.is_none());
+}
+#[test]
+fn action_progress_labels_switch_and_rename_before_running() {
+    let mut app = app();
+    app.start_action("use");
+    assert_eq!(app.message, "Switching…");
+    app.start_action("rename");
+    assert_eq!(app.message, "Renaming…");
+}
+#[test]
+fn action_result_preserves_success_or_failure() {
+    let mut app = app();
+    app.result("Renamed", true);
+    assert_eq!(app.message, "Renamed");
+    assert_eq!(app.action_success, Some(true));
+    app.result("Blocked", false);
+    assert_eq!(app.message, "Blocked");
+    assert_eq!(app.action_success, Some(false));
+}
