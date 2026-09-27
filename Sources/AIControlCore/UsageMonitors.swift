@@ -21,8 +21,18 @@ struct UsageMonitors {
     }
 
     func monitors(includeUsage: Bool) async -> [LoginStatus.Monitor] {
-        guard let key = opencodeGoKey() else { return [] }
-        guard includeUsage else { return [.init(id: "opencode-go", name: "OpenCode Go", usage: nil, error: nil)] }
+        var result: [LoginStatus.Monitor] = []
+        if let key = opencodeGoKey() {
+            result.append(await opencodeGoMonitor(key: key, includeUsage: includeUsage))
+        }
+        if let key = environment["NAN_API_KEY"], !key.isEmpty {
+            result.append(await nanMonitor(key: key, includeUsage: includeUsage))
+        }
+        return result
+    }
+
+    private func opencodeGoMonitor(key: String, includeUsage: Bool) async -> LoginStatus.Monitor {
+        guard includeUsage else { return .init(id: "opencode-go", name: "OpenCode Go", usage: nil, error: nil) }
         var request = URLRequest(url: URL(string: "https://opencode.ai/zen/go/v1/usage")!, timeoutInterval: 15)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         let usage: LoginStatus.Usage?
@@ -52,7 +62,74 @@ struct UsageMonitors {
             usage = nil
             message = "OpenCode Go usage is unavailable."
         }
-        return [.init(id: "opencode-go", name: "OpenCode Go", usage: usage, error: message)]
+        return .init(id: "opencode-go", name: "OpenCode Go", usage: usage, error: message)
+    }
+
+    // NaN Models page (nan.builders/docs/models), checked 2026-09-27; NaN rotates models quarterly.
+    private static let nanMonthlyQuotas = [
+        "deepseek-v4-flash": 3_000_000_000,
+        "glm5.3-flash": 2_000_000_000,
+        "mimo-v2.5": 1_000_000_000,
+        "mimo-v2.6-flash": 1_000_000_000,
+        "qwen3.8-flash": 500_000_000
+    ]
+
+    private struct NaNReport: Decodable {
+        struct Totals: Decodable {
+            // Only the fields shown are required, so extra or missing counters do not break parsing.
+            struct Model: Decodable {
+                let model: String
+                let totalTokens: Int
+
+                enum CodingKeys: String, CodingKey { case model, totalTokens = "total_tokens" }
+            }
+            let byModel: [Model]
+            enum CodingKeys: String, CodingKey { case byModel = "by_model" }
+        }
+        let totals: Totals
+    }
+
+    private func nanMonitor(key: String, includeUsage: Bool) async -> LoginStatus.Monitor {
+        guard includeUsage else { return .init(id: "nan", name: "NaN", usage: nil, error: nil) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = now()
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+        let reset = calendar.date(byAdding: .month, value: 1, to: start)!
+        let dateFormatter = DateFormatter()
+        dateFormatter.calendar = calendar
+        dateFormatter.timeZone = calendar.timeZone
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        var components = URLComponents(string: "https://api.nan.builders/v1/usage")!
+        components.percentEncodedQuery = "start_date=\(dateFormatter.string(from: start))&end_date=\(dateFormatter.string(from: today))&limit=1"
+        var request = URLRequest(url: components.url!, timeoutInterval: 15)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        do {
+            let (status, body) = try await fetch(request)
+            switch status {
+            case 200:
+                guard let report = try? JSONDecoder().decode(NaNReport.self, from: body) else {
+                    return .init(id: "nan", name: "NaN", usage: nil, error: "NaN usage could not be read.")
+                }
+                let models: [LoginStatus.ModelUsage] = report.totals.byModel.filter { $0.totalTokens > 0 }.map { item in
+                    let quota = Self.nanMonthlyQuotas[item.model]
+                    let percent: Double? = quota.map { Double(item.totalTokens) / Double($0) * 100 }
+                    let resetAt: Date? = quota == nil ? nil : reset
+                    return .init(model: item.model, totalTokens: item.totalTokens,
+                                 quotaTokens: quota, usedPercent: percent, resetsAt: resetAt)
+                }.sorted { $0.totalTokens == $1.totalTokens ? $0.model < $1.model : $0.totalTokens > $1.totalTokens }
+                return .init(id: "nan", name: "NaN", usage: nil, models: models, error: nil)
+            case 401:
+                return .init(id: "nan", name: "NaN", usage: nil, error: "The NaN key was rejected.")
+            case 429:
+                return .init(id: "nan", name: "NaN", usage: nil, error: "NaN usage is rate limited; try again shortly.")
+            default:
+                return .init(id: "nan", name: "NaN", usage: nil, error: "NaN usage is unavailable.")
+            }
+        } catch {
+            return .init(id: "nan", name: "NaN", usage: nil, error: "NaN usage is unavailable.")
+        }
     }
 
     private func opencodeGoKey() -> String? {

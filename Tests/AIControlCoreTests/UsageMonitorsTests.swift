@@ -84,6 +84,79 @@ struct UsageMonitorsTests {
         #expect(usage.windows[0].resetsAt != nil)
     }
 
+    @Test("NaN key is environment-only and opt-in never fetches without usage")
+    func nanDiscovery() async {
+        for value in [nil, ""] as [String?] {
+            let subject = service(environment: value.map { ["NAN_API_KEY": $0] } ?? [:])
+            #expect(await subject.monitors(includeUsage: true).isEmpty)
+        }
+        let subject = service(environment: ["NAN_API_KEY": secret], fetch: { _ in
+            Issue.record("unexpected NaN fetch")
+            throw MonitorFailure()
+        })
+        let monitors = await subject.monitors(includeUsage: false)
+        #expect(monitors.map(\.id) == ["nan"])
+        #expect(monitors.first?.models == nil && monitors.first?.error == nil)
+    }
+
+    @Test("NaN requests UTC month boundaries and sorts nonzero models with only published quotas")
+    func nanModels() async throws {
+        let instant = try #require(ISO8601DateFormatter().date(from: "2026-09-27T12:00:00Z"))
+        let body = Data(#"{"totals":{"by_model":[{"model":"glm5.3","prompt_tokens":1,"completion_tokens":1,"total_tokens":40,"api_requests":1},{"model":"qwen3.8-flash","prompt_tokens":2,"completion_tokens":3,"total_tokens":250000000,"api_requests":1},{"model":"unknown","prompt_tokens":5,"completion_tokens":0,"total_tokens":40,"api_requests":1},{"model":"deepseek-v4-flash","prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"api_requests":0}]},"data":[],"has_more":true,"next_cursor":"ignored"}"#.utf8)
+        let subject = UsageMonitors(environment: ["NAN_API_KEY": secret], readFile: { _ in throw MonitorFailure() },
+            fetch: { request in
+                #expect(request.url?.absoluteString == "https://api.nan.builders/v1/usage?start_date=2026-09-01&end_date=2026-09-27&limit=1")
+                #expect(request.httpMethod == "GET")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(secret)")
+                #expect(request.timeoutInterval == 15)
+                return (200, body)
+            }, now: { instant })
+        let monitor = try #require(await subject.monitors(includeUsage: true).first)
+        #expect(monitor.usage == nil && monitor.error == nil)
+        let models = try #require(monitor.models)
+        #expect(models.map(\.model) == ["qwen3.8-flash", "glm5.3", "unknown"])
+        #expect(models[0].totalTokens == 250000000)
+        #expect(models[0].quotaTokens == 500000000)
+        #expect(models[0].usedPercent == 50)
+        #expect(models[0].resetsAt == ISO8601DateFormatter().date(from: "2026-10-01T00:00:00Z"))
+        #expect(models[1].quotaTokens == nil && models[1].usedPercent == nil && models[1].resetsAt == nil)
+        #expect(models[2].quotaTokens == nil && models[2].usedPercent == nil && models[2].resetsAt == nil)
+    }
+
+    @Test("NaN December usage resets in January and empty model lists are valid")
+    func nanCalendar() async throws {
+        let instant = try #require(ISO8601DateFormatter().date(from: "2026-12-31T23:59:00Z"))
+        let subject = UsageMonitors(environment: ["NAN_API_KEY": secret], readFile: { _ in throw MonitorFailure() },
+            fetch: { request in
+                #expect(request.url?.query == "start_date=2026-12-01&end_date=2026-12-31&limit=1")
+                return (200, Data(#"{"totals":{"by_model":[{"model":"mimo-v2.5","total_tokens":1000000000,"prompt_tokens":0,"completion_tokens":0,"api_requests":1}]}}"#.utf8))
+            }, now: { instant })
+        let model = try #require(await subject.monitors(includeUsage: true).first?.models?.first)
+        #expect(model.usedPercent == 100)
+        #expect(model.resetsAt == ISO8601DateFormatter().date(from: "2027-01-01T00:00:00Z"))
+        let empty = service(environment: ["NAN_API_KEY": secret], fetch: { _ in
+            (200, Data(#"{"totals":{"by_model":[]}}"#.utf8))
+        })
+        let monitor = try #require(await empty.monitors(includeUsage: true).first)
+        #expect(monitor.models?.isEmpty == true && monitor.error == nil)
+    }
+
+    @Test("NaN failures are safe and never reflect response bodies or credentials")
+    func nanFailures() async {
+        for (code, body, message) in [
+            (401, Data(secret.utf8), "The NaN key was rejected."),
+            (429, Data(secret.utf8), "NaN usage is rate limited; try again shortly."),
+            (500, Data(secret.utf8), "NaN usage is unavailable."),
+            (200, Data(#"{"totals":{"by_model":[{"model":"bad","total_tokens":"1"}]}}"#.utf8), "NaN usage could not be read.")
+        ] {
+            let subject = service(environment: ["NAN_API_KEY": secret], fetch: { _ in (code, body) })
+            let monitor = await subject.monitors(includeUsage: true).first
+            #expect(monitor?.models == nil && monitor?.error == message)
+            #expect(monitor?.error?.contains(secret) == false)
+        }
+        #expect(await service(environment: ["NAN_API_KEY": secret]).monitors(includeUsage: true).first?.error == "NaN usage is unavailable.")
+    }
+
     @Test("HTTP failures and network failures use safe exact errors")
     func failures() async {
         for (code, message) in [(401, "The OpenCode Go key was rejected."),
