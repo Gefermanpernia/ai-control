@@ -478,6 +478,125 @@ struct ControlStoreTests {
         else { Issue.record("list not reloaded") }
     }
 
+    @Test("Automatic checks use loaded usage once, switch only enabled idle providers, and reload the list")
+    func autoSwitchUsesLoadedUsage() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let counter = FetchCounter()
+        let body = Data(#"{"five_hour":{"utilization":100.0,"resets_at":null}}"#.utf8)
+        var settings = AIControlSettings()
+        settings.autoSwitch.claude = true
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 },
+            fetch: { _ in counter.count += 1; return body }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter(), settings: { settings })
+        try await #require(store.refreshClaudeUsage()).value
+        #expect(counter.count == 2)
+        #expect(backend.selectCalls == 0)
+        #expect(store.claudeNotice?.text.contains("no other account") == true)
+
+        // Load the current account at the limit, but give the candidate room.
+        let selective = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 },
+            fetch: { _ in
+                counter.count += 1
+                return Data((counter.count == 4
+                    ? #"{"five_hour":{"utilization":1.0,"resets_at":null}}"#
+                    : #"{"five_hour":{"utilization":100.0,"resets_at":null}}"#).utf8)
+            }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter(), settings: { settings })
+        try await #require(selective.refreshClaudeUsage()).value
+        #expect(counter.count == 4)
+        #expect(backend.selectCalls == 1)
+        #expect(selective.claudeNotice?.text.contains("switched from alpha to beta") == true)
+        if case .loaded(let state) = selective.claudeLogins { #expect(state.lastSelectedHint == "beta") }
+        else { Issue.record("automatic switch did not reload logins") }
+    }
+
+    @Test("Disabled switching and demo do not invoke the automatic engine")
+    func disabledAndDemoSkipAutomaticSwitch() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let counter = FetchCounter()
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 },
+            fetch: { _ in counter.count += 1; return Data(#"{"five_hour":{"utilization":100,"resets_at":null}}"#.utf8) },
+            signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter())
+        try await #require(store.refreshClaudeUsage()).value
+        #expect(counter.count == 2)
+        #expect(backend.selectCalls == 0 && store.claudeNotice == nil)
+        let demo = ControlStore.demo()
+        #expect(!demo.backgroundTick(now: Date()))
+        #expect(demo.claudeNotice == nil)
+    }
+
+    @Test("A refused automatic switch reports the engine line without a second usage fetch")
+    func autoSwitchRefusalAndBusy() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true, selectionError: ClaudeLoginSelectionError.changedRoots)
+        let counter = FetchCounter()
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 }, fetch: { _ in
+                counter.count += 1
+                return Data((counter.count.isMultiple(of: 2)
+                    ? #"{"five_hour":{"utilization":1,"resets_at":null}}"#
+                    : #"{"five_hour":{"utilization":100,"resets_at":null}}"#).utf8)
+            }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter(), settings: {
+            var options = AIControlSettings(); options.autoSwitch.claude = true; return options
+        })
+        try await #require(store.refreshClaudeUsage()).value
+        #expect(counter.count == 2)
+        #expect(store.claudeNotice?.text.contains("not switched to beta") == true)
+        #expect(backend.selectCalls == 1)
+    }
+
+    @Test("Background decisions re-read settings, wait for idle work, and share the open-window clock")
+    func backgroundDecisionAndClock() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let counter = FetchCounter()
+        let body = Data(#"{"five_hour":{"utilization":1.0,"resets_at":null}}"#.utf8)
+        var settings = AIControlSettings()
+        settings.refresh.enabled = true
+        settings.autoSwitch.claude = true
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 }, fetch: { _ in counter.count += 1; return body }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter(), settings: { settings })
+        let start = Date()
+        #expect(!store.backgroundTick(now: start))
+        settings.autoSwitch.background = true
+        #expect(store.backgroundDue(now: start))
+        #expect(store.backgroundTick(now: start))
+        #expect(!store.backgroundDue(now: start.addingTimeInterval(300)))
+        while store.isLoadingClaudeUsage { await Task.yield() }
+        #expect(counter.count == 2)
+        #expect(!store.backgroundDue(now: start.addingTimeInterval(299)))
+        store.windowOpened(now: start.addingTimeInterval(300))
+        #expect(!store.backgroundTick(now: start.addingTimeInterval(300)))
+        while store.isLoadingClaudeUsage || store.claudeActivity != .idle { await Task.yield() }
+        #expect(counter.count == 4)
+        #expect(!store.refreshDue(now: start.addingTimeInterval(301)))
+        store.windowClosed()
+        let action = try #require(store.selectClaudeLogin("beta"))
+        #expect(!store.backgroundTick(now: start.addingTimeInterval(1000)))
+        await action.value
+        settings.autoSwitch.background = false
+        #expect(!store.backgroundDue(now: start.addingTimeInterval(1000)))
+        #expect(!ControlStore.demo().backgroundTick(now: start.addingTimeInterval(1000)))
+    }
+
+    @Test("Successful renames update order, failed renames leave it unchanged")
+    func renameUpdatesPriorityOnlyOnSuccess() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        var renames: [(AIControlSettings.Provider, String, String)] = []
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }),
+                                 codexLogins: CodexLoginAppAdapter(),
+                                 renameInOrder: { renames.append(($0, $1, $2)) })
+        try await #require(store.renameClaudeLogin("missing", to: "other")).value
+        #expect(renames.isEmpty)
+        try await #require(store.renameClaudeLogin("alpha", to: "omega")).value
+        #expect(renames.count == 1)
+        #expect(renames.first?.0 == .claude && renames.first?.1 == "alpha" && renames.first?.2 == "omega")
+    }
+
     @Test("Provider icons come from installed apps, fall back to monograms, and never appear in the demo")
     func providerIconsComeFromInstalledApps() {
         let store = ControlStore(

@@ -89,6 +89,8 @@ final class ControlStore: ObservableObject {
     private let monitorSource: UsageMonitors
     /// The engine's options; read each time the window opens, so `aic settings` changes apply on the next open.
     private let settingsSource: () -> AIControlSettings
+    private let renameInOrder: (AIControlSettings.Provider, String, String) -> Void
+    private var backgroundTimer: Timer?
     private var settings = AIControlSettings()
     let providerIcons: [CLIProvider: NSImage]
 
@@ -96,15 +98,24 @@ final class ControlStore: ObservableObject {
         claudeLogins: ClaudeLoginAppAdapter = .configured(), codexLogins: CodexLoginAppAdapter = .configured(),
         appIcon: (CLIProvider) -> NSImage? = { $0.installedAppIcon() },
         monitors: UsageMonitors = .live,
-        settings: @escaping () -> AIControlSettings = { AIControlSettings() }
+        settings: @escaping () -> AIControlSettings = { AIControlSettings() },
+        renameInOrder: @escaping (AIControlSettings.Provider, String, String) -> Void = { _, _, _ in },
+        backgroundTimerEnabled: Bool = false
     ) {
         claudeAdapter = claudeLogins
         codexAdapter = codexLogins
         monitorSource = monitors
         settingsSource = settings
+        self.renameInOrder = renameInOrder
         providerIcons = Dictionary(uniqueKeysWithValues: CLIProvider.allCases.compactMap { provider in
             appIcon(provider).map { (provider, $0) }
         })
+        if backgroundTimerEnabled {
+            backgroundTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                Task { @MainActor [weak self] in self?.backgroundTick() }
+            }
+        }
     }
 
     /// Only real Claude trouble warrants the menu-bar alert; mock Codex usage never does.
@@ -228,6 +239,24 @@ final class ControlStore: ObservableObject {
         loadAllUsage(at: now)
     }
     func windowClosed() { windowIsOpen = false }
+    /// Closed-window checks use the same load timestamp as the open-window timer.
+    func backgroundDue(now: Date) -> Bool {
+        let current = settingsSource()
+        guard !isDemo, !windowIsOpen, current.backgroundRefreshActive,
+              !isLoadingClaudeUsage, !isLoadingCodexUsage, !isLoadingMonitors,
+              claudeActivity == .idle, codexActivity == .idle else { return false }
+        let interval = TimeInterval(max(AIControlSettings.minimumInterval, current.refresh.intervalSeconds))
+        return lastUsageLoad.map { now.timeIntervalSince($0) >= interval } ?? true
+    }
+    @discardableResult
+    func backgroundTick(now: Date = Date()) -> Bool {
+        guard backgroundDue(now: now) else { return false }
+        let current = settingsSource()
+        lastUsageLoad = now
+        if current.autoSwitch.claude { refreshClaudeUsage(background: true) }
+        if current.autoSwitch.codex { refreshCodexUsage(background: true) }
+        return true
+    }
     /// Periodic refresh: on in the settings, window open, nothing loading or running, and a full interval
     /// (at least 300 seconds) since the last usage load.
     func refreshDue(now: Date) -> Bool {
@@ -260,21 +289,53 @@ final class ControlStore: ObservableObject {
         }
     }
     @discardableResult
-    func refreshClaudeUsage() -> Task<Void, Never>? {
+    func refreshClaudeUsage(background: Bool = false) -> Task<Void, Never>? {
         guard !isLoadingClaudeUsage else { return nil }
         isLoadingClaudeUsage = true
         return Task { @MainActor [claudeAdapter] in
             defer { isLoadingClaudeUsage = false }
-            claudeUsage = await claudeAdapter.usage()
+            let loaded = await claudeAdapter.usage()
+            claudeUsage = loaded
+            guard !isDemo, claudeActivity == .idle else { return }
+            let current = settingsSource()
+            guard current.switching(.claude), !background || current.backgroundRefreshActive else { return }
+            claudeActivity = .loading
+            defer { claudeActivity = .idle }
+            let adapter = AutoSwitchProvider.claude(claudeAdapter)
+            await applyAutoSwitch(.init(name: adapter.name, kind: adapter.kind, accounts: adapter.accounts,
+                                        usage: { loaded }, use: adapter.use), settings: current)
         }
     }
     @discardableResult
-    func refreshCodexUsage() -> Task<Void, Never>? {
+    func refreshCodexUsage(background: Bool = false) -> Task<Void, Never>? {
         guard !isLoadingCodexUsage else { return nil }
         isLoadingCodexUsage = true
         return Task { @MainActor [codexAdapter] in
             defer { isLoadingCodexUsage = false }
-            codexUsage = await codexAdapter.usage()
+            let loaded = await codexAdapter.usage()
+            codexUsage = loaded
+            guard !isDemo, codexActivity == .idle else { return }
+            let current = settingsSource()
+            guard current.switching(.codex), !background || current.backgroundRefreshActive else { return }
+            codexActivity = .loading
+            defer { codexActivity = .idle }
+            let adapter = AutoSwitchProvider.codex(codexAdapter)
+            await applyAutoSwitch(.init(name: adapter.name, kind: adapter.kind, accounts: adapter.accounts,
+                                        usage: { loaded }, use: adapter.use), settings: current)
+        }
+    }
+    private func applyAutoSwitch(_ provider: AutoSwitchProvider, settings: AIControlSettings) async {
+        var lines: [String] = []
+        _ = await runAutoSwitchCheck(providers: [provider], settings: settings, output: { lines.append($0) })
+        guard let line = lines.first, !line.contains(": automatic switching is off."),
+              !line.hasSuffix(" is below \(settings.autoSwitch.thresholdPercent)%.") else { return }
+        let notice = ClaudeLoginNotice(text: line, offersRecovery: false)
+        if provider.kind == .claude {
+            claudeNotice = notice
+            if line.contains(": switched from ") { await applyClaudeList() }
+        } else {
+            codexNotice = notice
+            if line.contains(": switched from ") { await applyCodexList() }
         }
     }
     @discardableResult
@@ -295,7 +356,10 @@ final class ControlStore: ObservableObject {
         claudeActivity = .loading
         return Task { @MainActor [claudeAdapter] in
             let result = await claudeAdapter.rename(alias: alias, to: newAlias)
-            if case .done = result { claudeUsage[newAlias] = claudeUsage.removeValue(forKey: alias) }
+            if case .done = result {
+                claudeUsage[newAlias] = claudeUsage.removeValue(forKey: alias)
+                renameInOrder(.claude, alias, newAlias)
+            }
             claudeNotice = Self.notice(for: result)
             await applyClaudeList()
             claudeActivity = .idle
@@ -318,7 +382,10 @@ final class ControlStore: ObservableObject {
         codexActivity = .loading
         return Task { @MainActor [codexAdapter] in
             let result = await codexAdapter.rename(alias: alias, to: newAlias)
-            if case .done = result { codexUsage[newAlias] = codexUsage.removeValue(forKey: alias) }
+            if case .done = result {
+                codexUsage[newAlias] = codexUsage.removeValue(forKey: alias)
+                renameInOrder(.codex, alias, newAlias)
+            }
             codexNotice = Self.notice(for: result)
             await applyCodexList()
             codexActivity = .idle
@@ -383,7 +450,11 @@ public func runAIControl() {
 }
 
 struct AIControlApp: App {
-    @StateObject private var store = ControlStore(settings: { (try? SettingsStore.live.load()) ?? AIControlSettings() })
+    @StateObject private var store = ControlStore(
+        settings: { (try? SettingsStore.live.load()) ?? AIControlSettings() },
+        renameInOrder: { provider, old, new in try? SettingsStore.live.renameInOrder(provider, from: old, to: new) },
+        backgroundTimerEnabled: true
+    )
 
     var body: some Scene {
         MenuBarExtra {
