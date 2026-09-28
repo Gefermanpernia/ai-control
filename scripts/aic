@@ -9,6 +9,7 @@
 #   aic usage                 usage of every saved Claude and Codex login
 #   aic status [--json] [--usage]   machine-readable login status
 #   aic settings [set <key> <value>]  show or change refresh and automatic switching options
+#   aic auto-switch check | order <claude|codex> | move <claude|codex> <name> up|down
 #   aic codex save|use|list|rename ...   the same for Codex
 #   aic codex login <name>               sign in to another Codex account safely and save it
 set -eu
@@ -98,7 +99,7 @@ if [ "$1" = "login" ] && { [ $# -eq 2 ] || [ $# -eq 3 ]; }; then
     exec "$binary" claude-login save "$2"
 fi
 if [ "$1" = "usage" ]; then exec "$binary" usage; fi
-if [ "$1" = "settings" ]; then exec "$binary" "$@"; fi
+if [ "$1" = "settings" ] || [ "$1" = "auto-switch" ]; then exec "$binary" "$@"; fi
 if [ "$1" = "status" ]; then
     shift
     if [ "${1:-}" = "--json" ]; then shift; fi

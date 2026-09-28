@@ -21,6 +21,9 @@ struct AIControlSettings: Codable, Equatable {
         var thresholdPercent = 99
         /// Refresh usage with no interface open; only used while switching is on for a provider.
         var background = false
+        /// Preferred order of saved accounts; accounts not listed follow by name.
+        var claudeOrder: [String] = []
+        var codexOrder: [String] = []
 
         init() {}
         init(from decoder: Decoder) throws {
@@ -30,6 +33,16 @@ struct AIControlSettings: Codable, Equatable {
             let threshold = try values.decodeIfPresent(Int.self, forKey: .thresholdPercent) ?? 99
             thresholdPercent = AIControlSettings.thresholds.contains(threshold) ? threshold : 99
             background = try values.decodeIfPresent(Bool.self, forKey: .background) ?? false
+            claudeOrder = Self.validNames(try values.decodeIfPresent([String].self, forKey: .claudeOrder))
+            codexOrder = Self.validNames(try values.decodeIfPresent([String].self, forKey: .codexOrder))
+        }
+
+        /// Only saved-account names, once each; anything else in the file is dropped.
+        static func validNames(_ names: [String]?) -> [String] {
+            var seen: Set<String> = []
+            return (names ?? []).filter {
+                $0.range(of: #"\A[a-z][a-z0-9_-]{0,31}\z"#, options: .regularExpression) != nil && seen.insert($0).inserted
+            }
         }
     }
 
@@ -39,6 +52,14 @@ struct AIControlSettings: Codable, Equatable {
     var version = 1
     var refresh = Refresh()
     var autoSwitch = AutoSwitch()
+
+    enum Provider { case claude, codex }
+
+    func order(_ provider: Provider) -> [String] { provider == .claude ? autoSwitch.claudeOrder : autoSwitch.codexOrder }
+    func switching(_ provider: Provider) -> Bool { provider == .claude ? autoSwitch.claude : autoSwitch.codex }
+    mutating func setOrder(_ provider: Provider, _ names: [String]) {
+        if provider == .claude { autoSwitch.claudeOrder = names } else { autoSwitch.codexOrder = names }
+    }
 
     var backgroundRefreshActive: Bool { autoSwitch.background && (autoSwitch.claude || autoSwitch.codex) }
 
@@ -80,6 +101,16 @@ struct SettingsStore {
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         let data = try encoder.encode(settings)
         do { try file.update(data: data) } catch IsolatedKeychainError.missing { try file.create(data: data) }
+    }
+}
+
+extension SettingsStore {
+    /// Keeps a renamed account's place in the priority order.
+    func renameInOrder(_ provider: AIControlSettings.Provider, from alias: String, to newAlias: String) throws {
+        guard try load().order(provider).contains(alias) else { return }
+        try update { settings in
+            settings.setOrder(provider, settings.order(provider).map { $0 == alias ? newAlias : $0 })
+        }
     }
 }
 
