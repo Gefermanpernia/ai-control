@@ -255,8 +255,8 @@ final class ControlStore: ObservableObject {
         guard !isDemo, !isLoadingMonitors else { return nil }
         isLoadingMonitors = true
         return Task { @MainActor [monitorSource] in
+            defer { isLoadingMonitors = false }
             monitors = await monitorSource.monitors(includeUsage: true)
-            isLoadingMonitors = false
         }
     }
     @discardableResult
@@ -264,8 +264,8 @@ final class ControlStore: ObservableObject {
         guard !isLoadingClaudeUsage else { return nil }
         isLoadingClaudeUsage = true
         return Task { @MainActor [claudeAdapter] in
+            defer { isLoadingClaudeUsage = false }
             claudeUsage = await claudeAdapter.usage()
-            isLoadingClaudeUsage = false
         }
     }
     @discardableResult
@@ -273,8 +273,8 @@ final class ControlStore: ObservableObject {
         guard !isLoadingCodexUsage else { return nil }
         isLoadingCodexUsage = true
         return Task { @MainActor [codexAdapter] in
+            defer { isLoadingCodexUsage = false }
             codexUsage = await codexAdapter.usage()
-            isLoadingCodexUsage = false
         }
     }
     @discardableResult

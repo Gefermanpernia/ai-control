@@ -424,6 +424,30 @@ struct ControlStoreTests {
         #expect(store.refreshDue(now: opened.addingTimeInterval(1000)))
     }
 
+    @Test("A timer refresh that falls during an in-flight monitor load is deferred, not lost")
+    func timerWaitsForInFlightMonitors() async {
+        let gate = MonitorFetchGate()
+        let source = UsageMonitors(environment: ["OPENCODE_AUTH_CONTENT": #"{"opencode-go":{"type":"api","key":"synthetic"}}"#,
+                                                 "NAN_API_KEY": "synthetic"],
+                                   readFile: { _ in Issue.record("Unexpected login file access"); return Data() },
+                                   fetch: { request in await gate.fetch(request) }, now: Date.init)
+        var settings = AIControlSettings()
+        settings.refresh.enabled = true
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(), codexLogins: CodexLoginAppAdapter(),
+                                 monitors: source, settings: { settings })
+        let opened = Date()
+        store.windowOpened(now: opened)
+        await gate.waitForFirstRequest()
+        #expect(store.isLoadingMonitors)
+        #expect(!store.tick(now: opened.addingTimeInterval(400)), "the first load is still in flight")
+        await gate.releaseFirstRequest()
+        while store.isLoadingMonitors { await Task.yield() }
+        let beforeTimer = await gate.count
+        #expect(store.tick(now: opened.addingTimeInterval(415)), "the next tick runs the deferred refresh")
+        while store.isLoadingMonitors { await Task.yield() }
+        #expect(await gate.count > beforeTimer)
+    }
+
     @Test("The screenshot demo never refreshes on a timer")
     func demoNeverTicks() {
         let store = ControlStore.demo()
