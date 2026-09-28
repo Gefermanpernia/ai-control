@@ -94,6 +94,7 @@ final class ControlStore: ObservableObject {
     private let settingsStore: SettingsStore?
     private let renameInOrder: (AIControlSettings.Provider, String, String) -> Void
     private var backgroundTimer: Timer?
+    private var repeatedAutoSwitchOutcome: [AIControlSettings.Provider: AutoSwitchReport.Outcome] = [:]
     private var settings = AIControlSettings()
     let providerIcons: [CLIProvider: NSImage]
 
@@ -383,17 +384,28 @@ final class ControlStore: ObservableObject {
         }
     }
     private func applyAutoSwitch(_ provider: AutoSwitchProvider, settings: AIControlSettings) async {
-        var lines: [String] = []
-        _ = await runAutoSwitchCheck(providers: [provider], settings: settings, output: { lines.append($0) })
-        guard let line = lines.first, !line.contains(": automatic switching is off."),
-              !line.hasSuffix(" is below \(settings.autoSwitch.thresholdPercent)%.") else { return }
-        let notice = ClaudeLoginNotice(text: line, offersRecovery: false)
-        if provider.kind == .claude {
-            claudeNotice = notice
-            if line.contains(": switched from ") { await applyClaudeList() }
-        } else {
-            codexNotice = notice
-            if line.contains(": switched from ") { await applyCodexList() }
+        let report = await checkAutoSwitch(provider, settings: settings)
+        guard let notice = autoSwitchNotice(for: report) else { return }
+        if provider.kind == .claude { claudeNotice = notice } else { codexNotice = notice }
+        guard case .switched = report.outcome else { return }
+        if provider.kind == .claude { await applyClaudeList() } else { await applyCodexList() }
+    }
+    /// The notice a check result deserves. Switches and refusals always show; an unknown account in use, no
+    /// candidate or unreadable accounts show once and again only after the result changes, so each usage load
+    /// does not repeat them; a quiet result shows nothing and ends that repetition.
+    func autoSwitchNotice(for report: AutoSwitchReport) -> ClaudeLoginNotice? {
+        let notice = ClaudeLoginNotice(text: report.line, offersRecovery: false)
+        switch report.outcome {
+        case .switched, .refused:
+            repeatedAutoSwitchOutcome[report.kind] = nil
+            return notice
+        case .unknownCurrent, .noCandidate, .unreadable:
+            guard repeatedAutoSwitchOutcome[report.kind] != report.outcome else { return nil }
+            repeatedAutoSwitchOutcome[report.kind] = report.outcome
+            return notice
+        case .off, .stay:
+            repeatedAutoSwitchOutcome[report.kind] = nil
+            return nil
         }
     }
     @discardableResult
