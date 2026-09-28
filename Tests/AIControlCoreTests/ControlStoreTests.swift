@@ -836,7 +836,6 @@ private final class CodexStoreMemory: ClaudeLoginDataStore {
 private final class FetchCounter: @unchecked Sendable {
     var count = 0
 }
-#endif
 
 private final class MoveLines: @unchecked Sendable {
     private let lock = NSLock()
@@ -845,3 +844,4 @@ private final class MoveLines: @unchecked Sendable {
     func clear() { lock.withLock { lines.removeAll() } }
     var all: [String] { lock.withLock { lines } }
 }
+#endif
