@@ -131,6 +131,20 @@ func runAutoSwitchCheck(providers: [AutoSwitchProvider], settings: AIControlSett
     return status
 }
 
+/// Moves a saved account one place up or down in the priority order and saves it. It only reads and writes
+/// the settings, never a login adapter, so the menu can call it on the main actor with the accounts it shows.
+/// Returns the new order, or nil when `alias` is not among `names` (nothing is written then).
+func movePriority(_ kind: AIControlSettings.Provider, alias: String, up: Bool, in names: [String],
+                  store: SettingsStore) throws -> [String]? {
+    guard names.contains(alias) else { return nil }
+    var order: [String]?
+    try store.update { settings in
+        order = AutoSwitchPlanner.moving(alias, up: up, in: names, by: settings.order(kind))
+        if let order { settings.setOrder(kind, order) }
+    }
+    return order
+}
+
 /// `auto-switch check [--background]`, `auto-switch order claude|codex`,
 /// `auto-switch move claude|codex <alias> up|down`.
 func runAutoSwitch(arguments: [String], claude: ClaudeLoginAppAdapter = .configured(),
@@ -158,12 +172,11 @@ func runAutoSwitch(arguments: [String], claude: ClaudeLoginAppAdapter = .configu
         case let command where command.count == 2 && command[0] == "order":
             AutoSwitchPlanner.ordered(names, by: settings.order(provider.kind)).forEach(output)
         case let command where command.count == 4 && command[0] == "move" && ["up", "down"].contains(command[3]):
-            guard let order = AutoSwitchPlanner.moving(command[2], up: command[3] == "up", in: names,
-                                                       by: settings.order(provider.kind)) else {
-                output("\(command[2]) is not a saved \(provider.name) account."); result.value = 3; return
-            }
             do {
-                try store.update { $0.setOrder(provider.kind, order) }
+                guard let order = try movePriority(provider.kind, alias: command[2], up: command[3] == "up",
+                                                   in: names, store: store) else {
+                    output("\(command[2]) is not a saved \(provider.name) account."); result.value = 3; return
+                }
                 order.forEach(output)
             } catch { output("Blocked: settings could not be saved."); result.value = 3 }
         default:

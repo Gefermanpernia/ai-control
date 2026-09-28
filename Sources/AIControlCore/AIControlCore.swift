@@ -84,11 +84,14 @@ final class ControlStore: ObservableObject {
     @Published private(set) var isLoadingCodexUsage = false
     @Published var isShowingSettings = false
     @Published var appearance: Appearance = .system
+    @Published private(set) var menuSettings = AIControlSettings()
+    @Published private(set) var settingsNotice: String?
     private let claudeAdapter: ClaudeLoginAppAdapter
     private let codexAdapter: CodexLoginAppAdapter
     private let monitorSource: UsageMonitors
     /// The engine's options; read each time the window opens, so `aic settings` changes apply on the next open.
     private let settingsSource: () -> AIControlSettings
+    private let settingsStore: SettingsStore?
     private let renameInOrder: (AIControlSettings.Provider, String, String) -> Void
     private var backgroundTimer: Timer?
     private var settings = AIControlSettings()
@@ -100,22 +103,76 @@ final class ControlStore: ObservableObject {
         monitors: UsageMonitors = .live,
         settings: @escaping () -> AIControlSettings = { AIControlSettings() },
         renameInOrder: @escaping (AIControlSettings.Provider, String, String) -> Void = { _, _, _ in },
-        backgroundTimerEnabled: Bool = false
+        settingsStore: SettingsStore? = nil, backgroundTimerEnabled: Bool = false
     ) {
         claudeAdapter = claudeLogins
         codexAdapter = codexLogins
         monitorSource = monitors
-        settingsSource = settings
+        settingsSource = settingsStore.map { store in { (try? store.load()) ?? AIControlSettings() } } ?? settings
+        self.settingsStore = settingsStore
         self.renameInOrder = renameInOrder
         providerIcons = Dictionary(uniqueKeysWithValues: CLIProvider.allCases.compactMap { provider in
             appIcon(provider).map { (provider, $0) }
         })
+        menuSettings = settingsSource()
         if backgroundTimerEnabled {
             backgroundTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
                 Task { @MainActor [weak self] in self?.backgroundTick() }
             }
         }
+    }
+
+    func reloadMenuSettings() {
+        menuSettings = settingsSource()
+        settings = menuSettings
+    }
+
+    var canEnableBackgroundRefresh: Bool { menuSettings.autoSwitch.claude || menuSettings.autoSwitch.codex }
+
+    @discardableResult
+    func setMenuSetting(_ key: String, value: String) -> Bool {
+        guard !isDemo, let settingsStore else { return false }
+        if key == "background-refresh", value == "on", !canEnableBackgroundRefresh { return false }
+        var lines: [String] = []
+        let status = runSettings(arguments: ["settings", "set", key, value], store: settingsStore,
+                                 output: { lines.append($0) })
+        if status != 0 { settingsNotice = lines.last; return false }
+        settingsNotice = nil
+        reloadMenuSettings()
+        return true
+    }
+
+    var orderedClaudeLogins: [ClaudeLoginAppState.Alias] {
+        guard case .loaded(let state) = claudeLogins else { return [] }
+        let names = AutoSwitchPlanner.ordered(state.aliases.map(\.name), by: menuSettings.order(.claude))
+        return names.compactMap { name in state.aliases.first { $0.name == name } }
+    }
+    var orderedCodexLogins: [CodexLoginListing.Login] {
+        guard case .loaded(let listing) = codexLogins else { return [] }
+        let names = AutoSwitchPlanner.ordered(listing.logins.map(\.name), by: menuSettings.order(.codex))
+        return names.compactMap { name in listing.logins.first { $0.name == name } }
+    }
+    func canMoveLogin(_ provider: AIControlSettings.Provider, alias: String, up: Bool) -> Bool {
+        let names = provider == .claude ? orderedClaudeLogins.map(\.name) : orderedCodexLogins.map(\.name)
+        let activity = provider == .claude ? claudeActivity : codexActivity
+        guard !isDemo, settingsStore != nil, activity == .idle, let index = names.firstIndex(of: alias) else { return false }
+        return names.indices.contains(up ? index - 1 : index + 1)
+    }
+    /// Moves an account in the priority order using the accounts on screen; it never waits on a login adapter.
+    @discardableResult
+    func moveLogin(_ provider: AIControlSettings.Provider, alias: String, up: Bool) -> Bool {
+        guard canMoveLogin(provider, alias: alias, up: up), let settingsStore else { return false }
+        let names = provider == .claude ? orderedClaudeLogins.map(\.name) : orderedCodexLogins.map(\.name)
+        do {
+            guard try movePriority(provider, alias: alias, up: up, in: names, store: settingsStore) != nil else { return false }
+        } catch {
+            let notice = ClaudeLoginNotice(text: "Blocked: settings could not be saved.", offersRecovery: false)
+            if provider == .claude { claudeNotice = notice } else { codexNotice = notice }
+            return false
+        }
+        reloadMenuSettings()
+        return true
     }
 
     /// Only real Claude trouble warrants the menu-bar alert; mock Codex usage never does.
@@ -199,10 +256,11 @@ final class ControlStore: ObservableObject {
     private var isDemo = false
 
     /// Example accounts for screenshots; a demo store never loads or changes real logins.
-    static func demo(now: Date = Date(), monitors: UsageMonitors = .live) -> ControlStore {
+    static func demo(now: Date = Date(), monitors: UsageMonitors = .live,
+                     settingsStore: SettingsStore? = nil) -> ControlStore {
         // Screenshots stay free of provider logos, so the demo never shows installed app icons.
         let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(), codexLogins: CodexLoginAppAdapter(),
-                                 appIcon: { _ in nil }, monitors: monitors)
+                                 appIcon: { _ in nil }, monitors: monitors, settingsStore: settingsStore)
         store.isDemo = true
         func usage(_ windows: [(String, Double, Double)], resets: Int? = nil) -> LoginUsageResult {
             .usage(.init(windows: windows.map { .init(label: $0.0, usedPercent: $0.1, resetsAt: now.addingTimeInterval($0.2 * 3600)) },
@@ -232,7 +290,7 @@ final class ControlStore: ObservableObject {
     func windowOpened(now: Date = Date()) {
         guard !isDemo else { return }
         windowIsOpen = true
-        settings = settingsSource()
+        reloadMenuSettings()
         reloadClaudeLogins()
         reloadCodexLogins()
         if let lastUsageLoad, now.timeIntervalSince(lastUsageLoad) < 30 { return }
@@ -453,7 +511,7 @@ struct AIControlApp: App {
     @StateObject private var store = ControlStore(
         settings: { (try? SettingsStore.live.load()) ?? AIControlSettings() },
         renameInOrder: { provider, old, new in try? SettingsStore.live.renameInOrder(provider, from: old, to: new) },
-        backgroundTimerEnabled: true
+        settingsStore: .live, backgroundTimerEnabled: true
     )
 
     var body: some Scene {
@@ -675,7 +733,7 @@ struct ControlView: View {
                 .loginMessageStyle()
         case .loaded(let state):
             VStack(spacing: 4) {
-                ForEach(state.aliases, id: \.name) { alias in
+                ForEach(store.orderedClaudeLogins, id: \.name) { alias in
                     if renaming == RenameTarget(provider: .claude, alias: alias.name) {
                         renameField(.claude, alias: alias.name)
                     } else {
@@ -699,7 +757,10 @@ struct ControlView: View {
         }
         .buttonStyle(.plain)
         .disabled(!store.canSelectClaudeLogin(alias))
-        .contextMenu { renameButton(.claude, alias: alias.name) }
+        .contextMenu {
+            renameButton(.claude, alias: alias.name)
+            priorityButtons(.claude, alias: alias.name)
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(alias.name + status + (selected ? ", selected" : "") + (switching ? ", switching" : "")))
         .accessibilityHint(Text(alias.requiresReLogin
@@ -721,7 +782,7 @@ struct ControlView: View {
                 .loginMessageStyle()
         case .loaded(let listing):
             VStack(spacing: 4) {
-                ForEach(listing.logins, id: \.name) { login in
+                ForEach(store.orderedCodexLogins, id: \.name) { login in
                     if renaming == RenameTarget(provider: .codex, alias: login.name) {
                         renameField(.codex, alias: login.name)
                     } else {
@@ -745,7 +806,10 @@ struct ControlView: View {
         .buttonStyle(.plain)
         // Clicking the login already in use does nothing; disabling it would only dim the row.
         .disabled(store.codexActivity != .idle)
-        .contextMenu { renameButton(.codex, alias: login.name) }
+        .contextMenu {
+            renameButton(.codex, alias: login.name)
+            priorityButtons(.codex, alias: login.name)
+        }
         .accessibilityAction(named: Text("Rename")) { startRenaming(.codex, alias: login.name) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("\(login.name), \(email)\(state)"))
@@ -754,6 +818,14 @@ struct ControlView: View {
 
     private func renameButton(_ provider: CLIProvider, alias: String) -> some View {
         Button("Rename…") { startRenaming(provider, alias: alias) }
+    }
+
+    @ViewBuilder private func priorityButtons(_ provider: CLIProvider, alias: String) -> some View {
+        let kind: AIControlSettings.Provider = provider == .claude ? .claude : .codex
+        Button("Move up") { store.moveLogin(kind, alias: alias, up: true) }
+            .disabled(!store.canMoveLogin(kind, alias: alias, up: true))
+        Button("Move down") { store.moveLogin(kind, alias: alias, up: false) }
+            .disabled(!store.canMoveLogin(kind, alias: alias, up: false))
     }
 
     private func startRenaming(_ provider: CLIProvider, alias: String) {
@@ -854,11 +926,57 @@ struct ControlView: View {
             }
             .padding(12)
             .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Usage and switching").font(.body.weight(.medium))
+                Toggle("Refresh usage every", isOn: settingToggle("refresh", value: store.menuSettings.refresh.enabled))
+                    .accessibilityLabel("Refresh usage every")
+                Picker("Refresh interval", selection: Binding(
+                    get: { store.menuSettings.refresh.intervalSeconds },
+                    set: { store.setMenuSetting("refresh-interval", value: String($0)) }
+                )) {
+                    let seconds = store.menuSettings.refresh.intervalSeconds
+                    if ![300, 600, 900, 1800, 3600].contains(seconds) {
+                        Text("\(seconds) seconds").tag(seconds)
+                    }
+                    ForEach([5, 10, 15, 30, 60], id: \.self) { Text("\($0) minutes").tag($0 * 60) }
+                }
+                .disabled(!store.menuSettings.refresh.enabled)
+                .accessibilityLabel("Refresh interval in minutes")
+                Toggle("Switch Claude automatically", isOn: settingToggle("auto-switch-claude", value: store.menuSettings.autoSwitch.claude))
+                    .accessibilityLabel("Switch Claude automatically")
+                Toggle("Switch Codex automatically", isOn: settingToggle("auto-switch-codex", value: store.menuSettings.autoSwitch.codex))
+                    .accessibilityLabel("Switch Codex automatically")
+                Picker("Switch at", selection: Binding(
+                    get: { store.menuSettings.autoSwitch.thresholdPercent },
+                    set: { store.setMenuSetting("auto-switch-threshold", value: String($0)) }
+                )) {
+                    ForEach(Array(AIControlSettings.thresholds), id: \.self) { Text("\($0)%").tag($0) }
+                }
+                .accessibilityLabel("Switch at usage percentage")
+                Toggle("Refresh in the background", isOn: settingToggle("background-refresh", value: store.menuSettings.autoSwitch.background))
+                    .disabled(!store.canEnableBackgroundRefresh)
+                    .accessibilityLabel("Refresh in the background")
+                Text("Keeps checking with the menu closed.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text("Switching accounts to get around usage limits may break provider terms and suspend accounts.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let notice = store.settingsNotice {
+                    Text(notice).font(.caption2).foregroundStyle(.orange)
+                        .accessibilityLabel("Settings error: \(notice)")
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
             Button("Quit AI Control") { NSApp.terminate(nil) }
                 .buttonStyle(.bordered)
                 .keyboardShortcut("q")
         }
         .padding(12)
+    }
+
+    private func settingToggle(_ key: String, value: Bool) -> Binding<Bool> {
+        Binding(get: { value }, set: { store.setMenuSetting(key, value: $0 ? "on" : "off") })
     }
 
     private var footer: some View {
