@@ -380,7 +380,28 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
     } else {
         Style::default()
     };
-    frame.render_widget(Paragraph::new(vec![Line::from(format!("↑↓/jk move · Tab provider · Enter switch · n rename · s save · a add · r usage · q quit · updated {updated}")), Line::from(Span::styled(prompt, style))]), area);
+    let updated = format!("updated {updated}");
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(key_hints(usize::from(area.width), &updated)),
+            Line::from(Span::styled(prompt, style)),
+        ]),
+        area,
+    );
+}
+/// The longest key-hint line that fits `width` with the update time, which always stays visible.
+fn key_hints(width: usize, updated: &str) -> String {
+    const HINTS: [&str; 4] = [
+        "↑↓/jk move · Tab provider · Enter switch · n rename · s save · a add · r usage · q quit",
+        "↑↓ move · Tab · Enter switch · n rename · s save · a add · r usage · q quit",
+        "n rename · s save · a add · q quit",
+        "q quit",
+    ];
+    HINTS
+        .iter()
+        .map(|hints| format!("{hints} · {updated}"))
+        .find(|line| Line::from(line.as_str()).width() <= width)
+        .unwrap_or_else(|| updated.to_string())
 }
 
 #[cfg(test)]
@@ -609,6 +630,35 @@ mod tests {
         let buffer = rendered(&app, 140, 12, OffsetDateTime::UNIX_EPOCH);
         let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
         assert!(image.contains("Save current login as: p"), "{image}");
+    }
+    #[test]
+    fn footer_hints_shrink_to_fit_and_always_show_the_update_time() {
+        let s = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]}}"#;
+        let app = App::new(parse(s).unwrap());
+        let hints = |width: u16| {
+            let buffer = rendered(&app, width, 12, OffsetDateTime::UNIX_EPOCH);
+            row(&buffer, buffer.area.height - 2)
+        };
+        let wide = hints(140);
+        assert!(
+            wide.contains("Tab provider")
+                && wide.contains("s save")
+                && wide.contains("updated not yet loaded"),
+            "{wide}"
+        );
+        for width in [100, 80] {
+            let line = hints(width);
+            assert!(line.contains("updated not yet loaded"), "{width}: {line}");
+            assert!(
+                line.contains("s save") && line.contains("q quit"),
+                "{width}: {line}"
+            );
+        }
+        let narrow = hints(50);
+        assert!(
+            narrow.contains("q quit") && narrow.contains("updated"),
+            "{narrow}"
+        );
     }
     #[test]
     fn snapshot_and_narrow() {
