@@ -69,6 +69,28 @@ struct SettingsTests {
         #expect(settings.backgroundRefreshActive)
     }
 
+    @Test("Unknown keys in the file, such as a pasted credential, are never echoed or written back")
+    func unknownKeysAreDropped() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(atPath: store.directory, withIntermediateDirectories: true)
+        let secret = "sk-test-do-not-echo"
+        #expect(FileManager.default.createFile(
+            atPath: store.path, contents: Data(#"{"apiKey":"\#(secret)","refresh":{"enabled":true,"token":"\#(secret)"}}"#.utf8),
+            attributes: [.posixPermissions: 0o600]))
+
+        let (_, shown) = run(["settings"], store)
+        #expect(!shown.joined().contains(secret))
+        #expect(shown.joined().contains(#""enabled":true"#))
+        let encoder = JSONEncoder()
+        let status = LoginStatus(claude: .init(available: false, selected: nil, logins: [], installed: true),
+                                 codex: .init(available: false, inUse: nil, logins: [], installed: true),
+                                 monitors: [], settings: try store.load())
+        #expect(!String(decoding: try encoder.encode(status), as: UTF8.self).contains(secret))
+        #expect(run(["settings", "set", "refresh", "off"], store).0 == 0)
+        #expect(!String(decoding: try Data(contentsOf: URL(fileURLWithPath: store.path)), as: UTF8.self).contains(secret))
+    }
+
     @Test("settings prints the effective options as JSON")
     func printsJSON() throws {
         let (store, root) = try store()
