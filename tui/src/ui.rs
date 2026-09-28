@@ -240,6 +240,31 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
     }
     let footer_height = size.height.min(2);
     let available = size.height - footer_height;
+    let footer_area = Rect::new(
+        size.x,
+        size.bottom() - footer_height,
+        size.width,
+        footer_height,
+    );
+    if matches!(
+        app.mode,
+        Mode::Options | Mode::OptionInput | Mode::ConfirmRisk
+    ) {
+        let area = Rect::new(size.x, size.y, size.width, available.min(8));
+        if area.height >= 2 {
+            frame.render_widget(
+                Paragraph::new(option_rows(app)).block(
+                    Block::default()
+                        .title("Options")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan)),
+                ),
+                area,
+            );
+        }
+        footer(frame, footer_area, app, now);
+        return;
+    }
     let visible = app.visible();
     let desired: Vec<u16> = visible
         .iter()
@@ -338,17 +363,49 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
             );
         }
     }
-    footer(
-        frame,
-        Rect::new(
-            size.x,
-            size.bottom() - footer_height,
-            size.width,
-            footer_height,
+    footer(frame, footer_area, app, now);
+}
+/// One row per option with its current value, as the engine reported it in the last status.
+fn option_rows(app: &App) -> Vec<Line<'static>> {
+    let settings = &app.status.settings;
+    let on = |value: bool| if value { "on" } else { "off" };
+    let minutes = settings
+        .refresh
+        .interval_seconds
+        .max(crate::status::minimum_interval())
+        / 60;
+    [
+        format!(
+            "Refresh usage periodically: {}",
+            on(settings.refresh.enabled)
         ),
-        app,
-        now,
-    );
+        format!("Refresh interval: {minutes} min"),
+        format!(
+            "Claude automatic switch: {}",
+            on(settings.auto_switch.claude)
+        ),
+        format!("Codex automatic switch: {}", on(settings.auto_switch.codex)),
+        format!(
+            "Switch threshold: {}%",
+            settings.auto_switch.threshold_percent
+        ),
+        format!(
+            "Background checks with no window open: {}",
+            on(settings.auto_switch.background)
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, text)| {
+        let chosen = i == app.option;
+        let line = format!("{} {text}", if chosen { ">" } else { " " });
+        if chosen {
+            Line::from(Span::styled(line, Style::default().fg(Color::Cyan)))
+        } else {
+            Line::from(line)
+        }
+    })
+    .collect()
 }
 fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
     let prompt = match app.mode {
@@ -365,6 +422,22 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
         Mode::Save => format!("Save current login as: {}", app.input),
         Mode::AddAlias => format!("Alias: {}", app.input),
         Mode::AddEmail => format!("Claude email (optional): {}", app.input),
+        Mode::Options if app.loading.is_none() && !app.message.is_empty() => app.message.clone(),
+        Mode::Options => "↑↓ choose · Enter change · Esc back".into(),
+        Mode::OptionInput => {
+            let question = if app.option == 1 {
+                "Refresh interval in minutes (5 or more)"
+            } else {
+                "Switch threshold in percent (50 to 100)"
+            };
+            if app.message.is_empty() {
+                format!("{question}: {}", app.input)
+            } else {
+                format!("{question}: {} · {}", app.input, app.message)
+            }
+        }
+
+        Mode::ConfirmRisk => app.message.clone(),
     };
     let updated = app
         .updated
@@ -381,7 +454,7 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
             }
         })
         .unwrap_or_else(|| "not yet loaded".into());
-    let style = if app.mode == Mode::Normal
+    let style = if matches!(app.mode, Mode::Normal | Mode::Options)
         && app.loading != Some(Loading::Usage)
         && app.action_success == Some(false)
     {
@@ -410,9 +483,9 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
 /// The longest key-hint line that fits `width` with the update time, which always stays visible.
 fn key_hints(width: usize, updated: &str) -> String {
     const HINTS: [&str; 4] = [
-        "↑↓/jk move · J/K order · Tab provider · Enter switch · n rename · s save · a add · r usage · q quit",
-        "↑↓ move · Tab · Enter switch · n rename · s save · a add · r usage · q quit",
-        "n rename · s save · a add · q quit",
+        "↑↓/jk move · J/K order · Tab provider · Enter switch · n rename · s save · a add · o options · r usage · q quit",
+        "↑↓ move · Tab · Enter switch · n rename · s save · a add · o options · q quit",
+        "s save · a add · o options · q quit",
         "q quit",
     ];
     HINTS
@@ -710,6 +783,50 @@ mod tests {
         assert!(image.contains("Codex─"), "{image}");
         assert!(!image.contains("Codex · auto"), "{image}");
         assert!(row(&buffer, buffer.area.height - 2).contains("J/K order"));
+    }
+    #[test]
+    fn options_screen_lists_every_option_with_its_value() {
+        let s = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]},"settings":{"refresh":{"enabled":true,"intervalSeconds":600},"autoSwitch":{"claude":true,"thresholdPercent":97}}}"#;
+        let mut app = App::new(parse(s).unwrap());
+        app.key(crate::app::Key::Char('o'));
+        let buffer = rendered(&app, 120, 14, OffsetDateTime::UNIX_EPOCH);
+        let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
+        for expected in [
+            "> Refresh usage periodically: on",
+            "Refresh interval: 10 min",
+            "Claude automatic switch: on",
+            "Codex automatic switch: off",
+            "Switch threshold: 97%",
+            "Background checks with no window open: off",
+        ] {
+            assert!(image.contains(expected), "{expected}\n{image}");
+        }
+        assert!(!image.contains("No saved logins"), "{image}");
+    }
+    #[test]
+    fn a_refused_number_says_why_next_to_the_prompt() {
+        let s = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]},"settings":{"refresh":{"enabled":true}}}"#;
+        let mut app = App::new(parse(s).unwrap());
+        app.message = "Saved.".into();
+        for key in ['o', 'j'] {
+            app.key(crate::app::Key::Char(key));
+        }
+        app.key(crate::app::Key::Enter);
+        let footer = |app: &App| {
+            let buffer = rendered(app, 160, 12, OffsetDateTime::UNIX_EPOCH);
+            row(&buffer, buffer.area.height - 1)
+        };
+        assert!(
+            !footer(&app).contains("Saved."),
+            "a stale message is cleared"
+        );
+        app.key(crate::app::Key::Char('3'));
+        app.key(crate::app::Key::Enter);
+        let line = footer(&app);
+        assert!(
+            line.contains("minutes (5 or more): 3 · Not saved"),
+            "{line}"
+        );
     }
     #[test]
     fn snapshot_and_narrow() {

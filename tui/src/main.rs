@@ -122,12 +122,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.start_action(verb);
                 terminal.draw(|f| ui::draw(f, &app))?;
                 match client().lines(&args) {
-                    // `move` prints the new order; a short confirmation is enough on screen.
-                    Ok((_, true)) => app.result("Priority order saved.", true),
-                    Ok((lines, false)) => {
-                        app.result(lines.last().map_or("Not changed.", |l| l), false)
+                    Ok((lines, success)) => app.engine_result(verb, &lines, success),
+                    Err(error) => {
+                        app.result(&error, false);
+                        if verb == "settings" {
+                            app.mode = aic_tui::app::Mode::Options;
+                        }
                     }
-                    Err(error) => app.result(&error, false),
                 }
                 app.loading = Some(Loading::Status);
                 revision += 1;

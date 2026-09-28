@@ -60,7 +60,15 @@ pub enum Mode {
     Save,
     AddAlias,
     AddEmail,
+    /// The options screen; every change goes through `AIControl settings set`.
+    Options,
+    /// A number for the chosen option (refresh interval in minutes, switch threshold in percent).
+    OptionInput,
+    /// Turning automatic switching on, which needs the user to accept the provider-terms risk.
+    ConfirmRisk,
 }
+/// The rows of the options screen, in display order.
+pub const OPTION_COUNT: usize = 6;
 pub struct App {
     pub status: Status,
     pub provider: usize,
@@ -82,6 +90,10 @@ pub struct App {
     pub action_running: bool,
     /// A usage load showed an account in use at its switch threshold; the engine check runs once, when idle.
     pub check_pending: bool,
+    /// The chosen row of the options screen.
+    pub option: usize,
+    /// The engine arguments waiting for the risk confirmation.
+    pending_setting: Option<Vec<String>>,
 }
 impl App {
     pub fn new(status: Status) -> Self {
@@ -102,6 +114,8 @@ impl App {
             usage_requested: None,
             action_running: false,
             check_pending: false,
+            option: 0,
+            pending_setting: None,
         };
         app.status = in_priority_order(app.status);
         app.provider = app.visible().first().copied().unwrap_or(0);
@@ -192,6 +206,92 @@ impl App {
             .filter(|line| !line.ends_with("automatic switching is off."))
             .collect();
         self.result(&shown.join(" · "), success);
+    }
+    /// Shows the outcome of an `Effect::Engine` command; a settings change keeps the options screen open.
+    pub fn engine_result(&mut self, verb: &str, lines: &[String], success: bool) {
+        let text = match (verb, success) {
+            ("order", true) => "Priority order saved.".to_string(),
+            (_, _) if lines.is_empty() => {
+                if success { "Done." } else { "Not changed." }.to_string()
+            }
+            ("settings", _) => lines.join(" · "),
+            _ => lines.last().cloned().unwrap_or_default(),
+        };
+        self.result(&text, success);
+        if verb == "settings" {
+            self.mode = Mode::Options;
+        }
+    }
+    fn settings_set(key: &str, value: String) -> Effect {
+        Effect::Engine {
+            args: vec!["settings".into(), "set".into(), key.into(), value],
+            verb: "settings",
+        }
+    }
+    /// Enter on an options row: toggles flip through the engine, numbers open a prompt, and turning automatic
+    /// switching on waits for the risk confirmation.
+    fn choose_option(&mut self) -> Effect {
+        let settings = &self.status.settings;
+        let flip = |on: bool| if on { "off" } else { "on" }.to_string();
+        match self.option {
+            0 => Self::settings_set("refresh", flip(settings.refresh.enabled)),
+            2 | 3 => {
+                let (key, on) = if self.option == 2 {
+                    ("auto-switch-claude", settings.auto_switch.claude)
+                } else {
+                    ("auto-switch-codex", settings.auto_switch.codex)
+                };
+                if on {
+                    return Self::settings_set(key, "off".into());
+                }
+                self.pending_setting = Some(vec![
+                    "settings".into(),
+                    "set".into(),
+                    key.into(),
+                    "on".into(),
+                ]);
+                self.mode = Mode::ConfirmRisk;
+                self.message = "Providers may treat rotating accounts to get around usage limits as abuse and \
+                                suspend them. Turn automatic switching on? y/n"
+                    .into();
+                self.action_success = None;
+                Effect::None
+            }
+            5 => Self::settings_set("background-refresh", flip(settings.auto_switch.background)),
+            _ => {
+                self.mode = Mode::OptionInput;
+                self.input.clear();
+                self.message.clear();
+                Effect::None
+            }
+        }
+    }
+    /// A numeric option: the engine validates again, this only gives early feedback.
+    fn submit_option_input(&mut self) -> Effect {
+        let value: Option<i64> = self.input.trim().parse().ok();
+        if self.option == 1 {
+            match value {
+                Some(minutes) if minutes >= 5 => {
+                    self.input.clear();
+                    Self::settings_set("refresh-interval", (minutes * 60).to_string())
+                }
+                _ => {
+                    self.message = "Not saved: whole minutes, 5 or more.".into();
+                    Effect::None
+                }
+            }
+        } else {
+            match value {
+                Some(percent) if (50..=100).contains(&percent) => {
+                    self.input.clear();
+                    Self::settings_set("auto-switch-threshold", percent.to_string())
+                }
+                _ => {
+                    self.message = "Not saved: a whole percentage from 50 to 100.".into();
+                    Effect::None
+                }
+            }
+        }
     }
     fn at_threshold(&self) -> bool {
         let settings = &self.status.settings.auto_switch;
@@ -322,6 +422,48 @@ impl App {
             return Effect::Quit;
         }
         match self.mode {
+            Mode::Options => match key {
+                Key::Esc | Key::Char('o') | Key::Char('q') => {
+                    self.mode = Mode::Normal;
+                    self.message.clear();
+                }
+                Key::Up | Key::Char('k') => self.option = self.option.saturating_sub(1),
+                Key::Down | Key::Char('j') => self.option = (self.option + 1).min(OPTION_COUNT - 1),
+                Key::Enter | Key::Char(' ') => return self.choose_option(),
+                _ => {}
+            },
+            Mode::OptionInput => match key {
+                Key::Esc => {
+                    self.mode = Mode::Options;
+                    self.input.clear();
+                }
+                Key::Backspace => {
+                    self.input.pop();
+                }
+                Key::Char(c) if c.is_ascii_digit() => self.input.push(c),
+                Key::Enter => {
+                    let effect = self.submit_option_input();
+                    if effect != Effect::None {
+                        self.mode = Mode::Options;
+                    }
+                    return effect;
+                }
+                _ => {}
+            },
+            Mode::ConfirmRisk => {
+                self.mode = Mode::Options;
+                let pending = self.pending_setting.take();
+                if key == Key::Char('y') {
+                    if let Some(args) = pending {
+                        return Effect::Engine {
+                            args,
+                            verb: "settings",
+                        };
+                    }
+                }
+                self.message = "Not changed.".into();
+                self.action_success = None;
+            }
             Mode::Confirm => {
                 self.mode = Mode::Normal;
                 if key == Key::Char('y') {
@@ -402,6 +544,10 @@ impl App {
             Mode::Normal => match key {
                 Key::Char('q') | Key::Esc => return Effect::Quit,
                 Key::Char('r') => return Effect::Reload,
+                Key::Char('o') => {
+                    self.mode = Mode::Options;
+                    self.message.clear();
+                }
                 // Without a visible provider there is no account to switch, rename or add.
                 _ if self.visible().is_empty() => {}
                 Key::Tab => {

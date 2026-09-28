@@ -584,3 +584,105 @@ fn check_results_show_only_providers_with_switching_on() {
     assert_eq!(app.action_success, Some(true));
     assert!(!app.action_running);
 }
+
+const OPTIONS: &str = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[{"name":"a","needsLogin":false}]},"codex":{"available":true,"installed":true,"logins":[]},"settings":{"refresh":{"enabled":false,"intervalSeconds":600},"autoSwitch":{"claude":true,"codex":false,"thresholdPercent":99,"background":false}}}"#;
+fn options() -> App {
+    let mut app = App::new(parse(OPTIONS).unwrap());
+    app.key(Key::Char('o'));
+    app
+}
+fn settings_set(key: &str, value: &str) -> Effect {
+    Effect::Engine {
+        args: vec!["settings".into(), "set".into(), key.into(), value.into()],
+        verb: "settings",
+    }
+}
+
+#[test]
+fn o_opens_the_options_and_escape_returns_to_the_accounts() {
+    let mut app = options();
+    assert_eq!(app.mode, Mode::Options);
+    assert_eq!(app.key(Key::Esc), Effect::None);
+    assert_eq!(app.mode, Mode::Normal);
+}
+#[test]
+fn toggles_ask_the_engine_for_the_opposite_value() {
+    let mut app = options();
+    assert_eq!(app.key(Key::Enter), settings_set("refresh", "on"));
+    app.key(Key::Down);
+    app.key(Key::Down);
+    assert_eq!(
+        app.key(Key::Enter),
+        settings_set("auto-switch-claude", "off"),
+        "turning off needs no confirmation"
+    );
+    app.key(Key::Down);
+    app.key(Key::Down);
+    app.key(Key::Down);
+    assert_eq!(
+        app.key(Key::Enter),
+        settings_set("background-refresh", "on")
+    );
+}
+#[test]
+fn turning_automatic_switching_on_asks_first_with_the_risk() {
+    let mut app = options();
+    app.key(Key::Char('j'));
+    app.key(Key::Char('j'));
+    app.key(Key::Char('j'));
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    assert_eq!(app.mode, Mode::ConfirmRisk);
+    assert!(app.message.contains("suspend"), "{}", app.message);
+    assert_eq!(app.key(Key::Char('n')), Effect::None);
+    assert_eq!(app.mode, Mode::Options);
+    app.key(Key::Enter);
+    assert_eq!(
+        app.key(Key::Char('y')),
+        settings_set("auto-switch-codex", "on")
+    );
+}
+#[test]
+fn interval_and_threshold_take_a_number_and_refuse_out_of_range_values() {
+    let mut app = options();
+    app.key(Key::Down);
+    app.key(Key::Enter);
+    assert_eq!(app.mode, Mode::OptionInput);
+    type_text(&mut app, "3");
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    assert!(app.message.contains("5 or more"), "{}", app.message);
+    app.key(Key::Backspace);
+    type_text(&mut app, "10");
+    assert_eq!(app.key(Key::Enter), settings_set("refresh-interval", "600"));
+    let mut app = options();
+    for _ in 0..4 {
+        app.key(Key::Down);
+    }
+    app.key(Key::Enter);
+    type_text(&mut app, "40");
+    assert_eq!(app.key(Key::Enter), Effect::None);
+    assert!(app.message.contains("from 50 to 100"), "{}", app.message);
+    for _ in 0..2 {
+        app.key(Key::Backspace);
+    }
+    type_text(&mut app, "97");
+    assert_eq!(
+        app.key(Key::Enter),
+        settings_set("auto-switch-threshold", "97")
+    );
+}
+#[test]
+fn a_saved_option_keeps_the_options_open_and_shows_the_engine_lines() {
+    let mut app = options();
+    app.key(Key::Enter);
+    app.start_action("settings");
+    app.engine_result(
+        "settings",
+        &["Saved.".into(), "Background checks enabled.".into()],
+        true,
+    );
+    assert_eq!(app.mode, Mode::Options);
+    assert_eq!(app.message, "Saved. · Background checks enabled.");
+    assert!(!app.action_running);
+    app.engine_result("order", &["b".into(), "a".into()], true);
+    assert_eq!(app.message, "Priority order saved.");
+}
