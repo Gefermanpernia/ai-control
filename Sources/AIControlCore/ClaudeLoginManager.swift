@@ -662,6 +662,7 @@ public func runClaudeLogins(arguments: [String]) -> Int32 {
         return runAsyncReport(arguments: arguments)
     }
     if arguments.first == "codex-login" { return runCodexLogins(arguments: arguments, output: { print($0) }) }
+    if arguments.first == "settings" { return runSettings(arguments: arguments, output: { print($0) }) }
     let liveBackend = ClaudeLiveSystem.configuredBackend(environment: ProcessInfo.processInfo.environment)
     return runClaudeLogins(
         arguments: arguments,

@@ -175,7 +175,8 @@ func runAsyncReport(
                 status.value = 2
                 return
             }
-            let snapshot = await loginStatus(claude: claude, codex: codex, includeUsage: arguments.count == 3, installed: .live)
+            let snapshot = await loginStatus(claude: claude, codex: codex, includeUsage: arguments.count == 3, installed: .live,
+                                             settings: (try? SettingsStore.live.load()) ?? .init())
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
