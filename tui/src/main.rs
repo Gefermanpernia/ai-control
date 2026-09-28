@@ -81,6 +81,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => app.status_error(&error),
             }
         }
+        if app.switch_check_due() {
+            // The engine decides and switches through its guarded commands; the UI only shows the outcome.
+            app.start_switch_check();
+            terminal.draw(|f| ui::draw(f, &app))?;
+            match client().lines(&["auto-switch".into(), "check".into()]) {
+                Ok((lines, success)) => app.switch_check_result(&lines, success),
+                Err(error) => app.result(&error, false),
+            }
+            app.loading = Some(Loading::Status);
+            revision += 1;
+            spawn_status(tx.clone(), revision, false);
+            continue;
+        }
         if !event::poll(Duration::from_millis(100))? {
             let now = time::OffsetDateTime::now_utc();
             if app.refresh_due(now) {
@@ -104,6 +117,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.start_usage_load(time::OffsetDateTime::now_utc());
                 revision += 1;
                 spawn_status(tx.clone(), revision, true);
+            }
+            Effect::Engine { args, verb } => {
+                app.start_action(verb);
+                terminal.draw(|f| ui::draw(f, &app))?;
+                match client().lines(&args) {
+                    // `move` prints the new order; a short confirmation is enough on screen.
+                    Ok((_, true)) => app.result("Priority order saved.", true),
+                    Ok((lines, false)) => {
+                        app.result(lines.last().map_or("Not changed.", |l| l), false)
+                    }
+                    Err(error) => app.result(&error, false),
+                }
+                app.loading = Some(Loading::Status);
+                revision += 1;
+                spawn_status(tx.clone(), revision, false);
             }
             Effect::Action {
                 provider,

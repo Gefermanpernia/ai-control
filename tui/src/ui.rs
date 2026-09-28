@@ -276,7 +276,15 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
     for (slot, &i) in visible.iter().enumerate() {
         let area = Rect::new(size.x, top, size.width, heights[slot]);
         top += heights[slot];
-        let title = ["Claude", "Codex"][i];
+        let auto = &app.status.settings.auto_switch;
+        let title = match (i, if i == 0 { auto.claude } else { auto.codex }) {
+            (_, true) => format!(
+                "{} · auto switch at {}%",
+                ["Claude", "Codex"][i],
+                auto.threshold_percent
+            ),
+            _ => ["Claude", "Codex"][i].to_string(),
+        };
         if area.height < 2 {
             continue;
         }
@@ -309,7 +317,7 @@ pub fn draw_at(frame: &mut Frame, app: &App, now: OffsetDateTime) {
                 .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0))
                 .block(
                     Block::default()
-                        .title(title)
+                        .title(title.as_str())
                         .borders(Borders::ALL)
                         .border_style(border),
                 ),
@@ -402,7 +410,7 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
 /// The longest key-hint line that fits `width` with the update time, which always stays visible.
 fn key_hints(width: usize, updated: &str) -> String {
     const HINTS: [&str; 4] = [
-        "↑↓/jk move · Tab provider · Enter switch · n rename · s save · a add · r usage · q quit",
+        "↑↓/jk move · J/K order · Tab provider · Enter switch · n rename · s save · a add · r usage · q quit",
         "↑↓ move · Tab · Enter switch · n rename · s save · a add · r usage · q quit",
         "n rename · s save · a add · q quit",
         "q quit",
@@ -691,6 +699,17 @@ mod tests {
             line.contains("updated not yet loaded · every 10 min"),
             "{line}"
         );
+    }
+    #[test]
+    fn panel_titles_mark_automatic_switching_and_the_footer_lists_order_keys() {
+        let s = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]},"settings":{"autoSwitch":{"claude":true,"thresholdPercent":97}}}"#;
+        let app = App::new(parse(s).unwrap());
+        let buffer = rendered(&app, 180, 12, OffsetDateTime::UNIX_EPOCH);
+        let image: String = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
+        assert!(image.contains("Claude · auto switch at 97%"), "{image}");
+        assert!(image.contains("Codex─"), "{image}");
+        assert!(!image.contains("Codex · auto"), "{image}");
+        assert!(row(&buffer, buffer.area.height - 2).contains("J/K order"));
     }
     #[test]
     fn snapshot_and_narrow() {

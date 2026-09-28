@@ -168,6 +168,22 @@ impl<R: Runner> SubprocessEngine<R> {
         Ok(outcome(&out))
     }
 }
+impl<R: Runner> SubprocessEngine<R> {
+    /// Runs any engine command and keeps every non-empty stdout line, for commands that report per provider.
+    pub fn lines(&self, args: &[String]) -> Result<(Vec<String>, bool), String> {
+        let out = self
+            .runner
+            .run(&self.path, args, false)
+            .map_err(|e| run_error(&self.path, e))?;
+        let lines = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect();
+        Ok((lines, out.status.success()))
+    }
+}
 impl<R: Runner> Engine for SubprocessEngine<R> {
     fn status(&self, usage: bool) -> Result<Status, String> {
         let mut args = vec!["status".into(), "--json".into()];

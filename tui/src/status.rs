@@ -74,6 +74,40 @@ pub struct Status {
 pub struct Settings {
     #[serde(default)]
     pub refresh: Refresh,
+    #[serde(default, rename = "autoSwitch")]
+    pub auto_switch: AutoSwitch,
+}
+/// Automatic switching options; the engine decides every switch, the UI only shows them and asks for a check.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoSwitch {
+    #[serde(default)]
+    pub claude: bool,
+    #[serde(default)]
+    pub codex: bool,
+    #[serde(default = "default_threshold")]
+    pub threshold_percent: i64,
+    #[serde(default)]
+    pub background: bool,
+    #[serde(default)]
+    pub claude_order: Vec<String>,
+    #[serde(default)]
+    pub codex_order: Vec<String>,
+}
+impl Default for AutoSwitch {
+    fn default() -> Self {
+        Self {
+            claude: false,
+            codex: false,
+            threshold_percent: default_threshold(),
+            background: false,
+            claude_order: Vec::new(),
+            codex_order: Vec::new(),
+        }
+    }
+}
+fn default_threshold() -> i64 {
+    99
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
