@@ -468,3 +468,119 @@ fn a_failed_refresh_keeps_the_last_usage_on_screen() {
     );
     assert!(app.refresh_due(at(1200)));
 }
+
+fn switching(order: &str, claude_on: bool, five_hour: f64, week: f64) -> Status {
+    parse(&format!(
+        r#"{{"version":1,"claude":{{"available":true,"installed":true,"selected":"a","logins":[
+            {{"name":"a","needsLogin":false,"usage":{{"windows":[{{"label":"5h","usedPercent":{five_hour},"resetsAt":null}},{{"label":"Week","usedPercent":{week},"resetsAt":null}}],"resetsAvailable":null,"fetchedAt":"2026-09-28T00:00:00Z"}}}},
+            {{"name":"b","needsLogin":false}},{{"name":"c","needsLogin":false}}]}},
+          "codex":{{"available":true,"installed":true,"inUse":"x","logins":[{{"name":"x"}},{{"name":"y"}}]}},
+          "settings":{{"autoSwitch":{{"claude":{claude_on},"thresholdPercent":99,"claudeOrder":{order}}}}}}}"#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn accounts_are_listed_in_priority_order() {
+    let app = App::new(switching(r#"["c","a"]"#, false, 0.0, 0.0));
+    let names: Vec<_> = app
+        .status
+        .claude
+        .logins
+        .iter()
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(names, ["c", "a", "b"]);
+    let mut app = two_logins();
+    app.apply_status(switching(r#"["b"]"#, false, 0.0, 0.0), false);
+    let names: Vec<_> = app
+        .status
+        .claude
+        .logins
+        .iter()
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(names, ["b", "a", "c"]);
+}
+#[test]
+fn shift_k_and_j_ask_the_engine_to_move_the_chosen_account() {
+    let mut app = App::new(switching("[]", false, 0.0, 0.0));
+    app.key(Key::Down);
+    assert_eq!(
+        app.key(Key::Char('K')),
+        Effect::Engine {
+            args: vec![
+                "auto-switch".into(),
+                "move".into(),
+                "claude".into(),
+                "b".into(),
+                "up".into()
+            ],
+            verb: "order"
+        }
+    );
+    app.key(Key::Tab);
+    assert_eq!(
+        app.key(Key::Char('J')),
+        Effect::Engine {
+            args: vec![
+                "auto-switch".into(),
+                "move".into(),
+                "codex".into(),
+                "x".into(),
+                "down".into()
+            ],
+            verb: "order"
+        }
+    );
+}
+#[test]
+fn a_check_is_due_after_usage_shows_the_current_account_at_the_threshold() {
+    for (five_hour, week, due) in [(99.0, 10.0, true), (10.0, 99.0, true), (98.9, 98.9, false)] {
+        let mut app = App::new(switching("[]", true, 0.0, 0.0));
+        app.apply_status(switching("[]", true, five_hour, week), true);
+        assert_eq!(app.switch_check_due(), due, "{five_hour} {week}");
+    }
+    let mut off = App::new(switching("[]", false, 0.0, 0.0));
+    off.apply_status(switching("[]", false, 100.0, 100.0), true);
+    assert!(!off.switch_check_due(), "automatic switching is off");
+    let mut plain = App::new(switching("[]", true, 0.0, 0.0));
+    plain.apply_status(switching("[]", true, 100.0, 100.0), false);
+    assert!(
+        !plain.switch_check_due(),
+        "only a usage load can trigger a check"
+    );
+}
+#[test]
+fn a_due_check_waits_for_prompts_and_actions_and_runs_once() {
+    let mut app = App::new(switching("[]", true, 0.0, 0.0));
+    app.apply_status(switching("[]", true, 100.0, 0.0), true);
+    app.key(Key::Char('n'));
+    assert!(!app.switch_check_due(), "a prompt is open");
+    app.key(Key::Esc);
+    app.start_action("use");
+    assert!(!app.switch_check_due(), "an action is running");
+    app.result("Switched", true);
+    assert!(app.switch_check_due());
+    app.start_switch_check();
+    assert!(!app.switch_check_due(), "one check per usage load");
+    assert_eq!(app.message, "Checking accounts…");
+}
+#[test]
+fn check_results_show_only_providers_with_switching_on() {
+    let mut app = App::new(switching("[]", true, 0.0, 0.0));
+    app.start_switch_check();
+    app.switch_check_result(
+        &[
+            "Claude: switched from a to b (a reached 99% of a usage limit).".into(),
+            "Codex: automatic switching is off.".into(),
+        ],
+        true,
+    );
+    assert_eq!(
+        app.message,
+        "Claude: switched from a to b (a reached 99% of a usage limit)."
+    );
+    assert_eq!(app.action_success, Some(true));
+    assert!(!app.action_running);
+}

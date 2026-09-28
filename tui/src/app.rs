@@ -46,6 +46,11 @@ pub enum Effect {
         alias: String,
         extra: Option<String>,
     },
+    /// Any other engine command; `verb` names it for the "working" message.
+    Engine {
+        args: Vec<String>,
+        verb: &'static str,
+    },
 }
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Mode {
@@ -75,6 +80,8 @@ pub struct App {
     pub usage_requested: Option<time::OffsetDateTime>,
     /// A switch, rename, save or sign-in is running; nothing else may start meanwhile.
     pub action_running: bool,
+    /// A usage load showed an account in use at its switch threshold; the engine check runs once, when idle.
+    pub check_pending: bool,
 }
 impl App {
     pub fn new(status: Status) -> Self {
@@ -94,7 +101,9 @@ impl App {
             updated: None,
             usage_requested: None,
             action_running: false,
+            check_pending: false,
         };
+        app.status = in_priority_order(app.status);
         app.provider = app.visible().first().copied().unwrap_or(0);
         app
     }
@@ -147,6 +156,8 @@ impl App {
             "use" => "Switching…",
             "rename" => "Renaming…",
             "save" => "Saving…",
+            "order" => "Reordering…",
+            "check" => "Checking accounts…",
             _ => "Working…",
         }
         .into();
@@ -160,6 +171,52 @@ impl App {
         self.mode = Mode::Normal;
         self.target = None;
         self.input.clear();
+    }
+    /// Automatic switching is decided by the engine; the UI only asks for a check when fresh usage shows an
+    /// account in use at or above the threshold on any window, so idle checks never refetch usage.
+    pub fn switch_check_due(&self) -> bool {
+        self.check_pending
+            && self.mode == Mode::Normal
+            && !self.action_running
+            && self.loading.is_none()
+    }
+    pub fn start_switch_check(&mut self) {
+        self.check_pending = false;
+        self.start_action("check");
+    }
+    /// Shows what the engine did for providers with switching on.
+    pub fn switch_check_result(&mut self, lines: &[String], success: bool) {
+        let shown: Vec<&str> = lines
+            .iter()
+            .map(String::as_str)
+            .filter(|line| !line.ends_with("automatic switching is off."))
+            .collect();
+        self.result(&shown.join(" · "), success);
+    }
+    fn at_threshold(&self) -> bool {
+        let settings = &self.status.settings.auto_switch;
+        let threshold = settings.threshold_percent as f64;
+        let spent = |usage: Option<&crate::status::Usage>| {
+            usage.is_some_and(|usage| usage.windows.iter().any(|w| w.used_percent >= threshold))
+        };
+        let claude = &self.status.claude;
+        let codex = &self.status.codex;
+        (settings.claude
+            && spent(
+                claude
+                    .logins
+                    .iter()
+                    .find(|l| Some(&l.name) == claude.selected.as_ref())
+                    .and_then(|l| l.usage.as_ref()),
+            ))
+            || (settings.codex
+                && spent(
+                    codex
+                        .logins
+                        .iter()
+                        .find(|l| Some(&l.name) == codex.in_use.as_ref())
+                        .and_then(|l| l.usage.as_ref()),
+                ))
     }
     /// Marks a usage load as started, for the loading state and the refresh timer.
     pub fn start_usage_load(&mut self, now: time::OffsetDateTime) {
@@ -193,7 +250,8 @@ impl App {
         self.message = error.into();
         self.action_success = Some(false);
     }
-    pub fn apply_status(&mut self, mut status: Status, with_usage: bool) {
+    pub fn apply_status(&mut self, status: Status, with_usage: bool) {
+        let mut status = in_priority_order(status);
         if !with_usage {
             for login in &mut status.claude.logins {
                 if let Some(previous) = self
@@ -255,6 +313,9 @@ impl App {
         }
         self.loading = None;
         self.updated = Some(time::OffsetDateTime::now_utc());
+        if with_usage {
+            self.check_pending = self.at_threshold();
+        }
     }
     pub fn key(&mut self, key: Key) -> Effect {
         if key == Key::Interrupt {
@@ -369,6 +430,23 @@ impl App {
                     };
                     self.input.clear();
                 }
+                Key::Char(c @ ('K' | 'J')) if self.name().is_some() => {
+                    return Effect::Engine {
+                        args: vec![
+                            "auto-switch".into(),
+                            "move".into(),
+                            if self.provider == 0 {
+                                "claude"
+                            } else {
+                                "codex"
+                            }
+                            .into(),
+                            self.name().unwrap().into(),
+                            if c == 'K' { "up" } else { "down" }.into(),
+                        ],
+                        verb: "order",
+                    };
+                }
                 Key::Char('s') => {
                     self.mode = Mode::Save;
                     self.input.clear();
@@ -382,6 +460,24 @@ impl App {
         }
         Effect::None
     }
+}
+/// Lists saved accounts in the engine's priority order: listed names first, the rest in engine order.
+fn in_priority_order(mut status: Status) -> Status {
+    fn sort<T>(logins: &mut [T], order: &[String], name: impl Fn(&T) -> &str) {
+        let rank = |login: &T| {
+            order
+                .iter()
+                .position(|n| n == name(login))
+                .unwrap_or(order.len())
+        };
+        logins.sort_by_key(|login| rank(login));
+    }
+    let settings = status.settings.auto_switch.clone();
+    sort(&mut status.claude.logins, &settings.claude_order, |l| {
+        &l.name
+    });
+    sort(&mut status.codex.logins, &settings.codex_order, |l| &l.name);
+    status
 }
 pub fn valid_alias(alias: &str) -> bool {
     let bytes = alias.as_bytes();

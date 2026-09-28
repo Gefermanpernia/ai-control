@@ -251,3 +251,32 @@ fn settings_default_to_off_for_older_engines() {
     assert!(!status.settings.refresh.enabled);
     assert_eq!(status.settings.refresh.interval_seconds, 300);
 }
+#[test]
+fn run_passes_arguments_and_keeps_every_output_line() {
+    let fake = Fake::response(
+        0,
+        "Claude: switched from a to b.\nCodex: automatic switching is off.\n",
+    );
+    let engine = SubprocessEngine::new(PathBuf::from("fake"), &fake);
+    let (lines, success) = engine
+        .lines(&["auto-switch".into(), "check".into()])
+        .unwrap();
+    assert!(success);
+    assert_eq!(
+        lines,
+        [
+            "Claude: switched from a to b.",
+            "Codex: automatic switching is off."
+        ]
+    );
+    assert_eq!(
+        fake.calls(),
+        vec![(vec!["auto-switch".into(), "check".into()], false)]
+    );
+}
+#[test]
+fn auto_switch_settings_default_to_off() {
+    let status = parse(SAMPLE).unwrap();
+    assert!(!status.settings.auto_switch.claude && !status.settings.auto_switch.codex);
+    assert_eq!(status.settings.auto_switch.threshold_percent, 99);
+}
