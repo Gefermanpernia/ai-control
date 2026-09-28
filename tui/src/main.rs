@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(initial());
     let (tx, rx) = mpsc::channel();
     app.status_loaded = false;
-    app.loading = Some(Loading::Usage);
+    app.start_usage_load(time::OffsetDateTime::now_utc());
     let mut revision = 1;
     spawn_status(tx.clone(), revision, true);
     loop {
@@ -82,6 +82,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if !event::poll(Duration::from_millis(100))? {
+            let now = time::OffsetDateTime::now_utc();
+            if app.refresh_due(now) {
+                app.start_usage_load(now);
+                revision += 1;
+                spawn_status(tx.clone(), revision, true);
+            }
             continue;
         }
         let Event::Key(event) = event::read()? else {
@@ -95,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Effect::None => {}
             Effect::Quit => break,
             Effect::Reload => {
-                app.loading = Some(Loading::Usage);
+                app.start_usage_load(time::OffsetDateTime::now_utc());
                 revision += 1;
                 spawn_status(tx.clone(), revision, true);
             }

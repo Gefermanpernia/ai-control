@@ -245,3 +245,9 @@ fn successful_actions_show_only_the_engine_line() {
         "Switched"
     );
 }
+#[test]
+fn settings_default_to_off_for_older_engines() {
+    let status = parse(SAMPLE).unwrap();
+    assert!(!status.settings.refresh.enabled);
+    assert_eq!(status.settings.refresh.interval_seconds, 300);
+}
