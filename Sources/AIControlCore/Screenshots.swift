@@ -9,15 +9,18 @@ import SwiftUI
 @MainActor
 public func renderScreenshots(to directory: String) -> Int32 {
     _ = NSApplication.shared
-    let shots: [(name: String, appearance: NSAppearance.Name, adding: CLIProvider?)] = [
-        ("menu-dark", .darkAqua, nil), ("menu-light", .aqua, nil), ("add-account", .darkAqua, .claude)
+    let shots: [(name: String, appearance: NSAppearance.Name, adding: CLIProvider?, settings: Bool)] = [
+        ("menu-dark", .darkAqua, nil, false), ("menu-light", .aqua, nil, false),
+        ("add-account", .darkAqua, .claude, false), ("settings", .darkAqua, nil, true)
     ]
     do {
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         for shot in shots {
             let appearance = NSAppearance(named: shot.appearance)
-            let content = ControlView(adding: shot.adding)
-                .environmentObject(ControlStore.demo())
+            let store = ControlStore.demo()
+            store.isShowingSettings = shot.settings
+            let content = ControlView(adding: shot.adding, listHeightLimit: 2000)
+                .environmentObject(store)
                 .background(Color(nsColor: .windowBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.12)))

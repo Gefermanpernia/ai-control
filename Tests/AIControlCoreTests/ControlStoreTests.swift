@@ -309,7 +309,7 @@ struct ControlStoreTests {
         #expect(await gate.count == 4)
     }
 
-    @Test("The screenshot demo never fetches monitors, even on manual refresh")
+    @Test("The screenshot demo shows example monitors but never fetches them, even on manual refresh")
     func demoDoesNotFetchMonitors() async {
         let gate = MonitorFetchGate()
         let source = UsageMonitors(environment: ["NAN_API_KEY": "synthetic"],
@@ -318,8 +318,20 @@ struct ControlStoreTests {
         let store = ControlStore.demo(monitors: source)
         store.windowOpened()
         #expect(store.refreshMonitors() == nil)
-        #expect(store.monitors.isEmpty && !store.isLoadingMonitors)
+        #expect(store.monitors.map(\.name) == ["OpenCode Go", "NaN"] && !store.isLoadingMonitors)
+        #expect(store.monitors[0].usage?.windows.count == 3)
+        #expect(store.monitors[1].models?.count == 2)
         #expect(await gate.count == 0)
+    }
+
+    @Test("The screenshot demo shows example options without reading or writing the settings file")
+    func demoShowsExampleOptions() {
+        let store = ControlStore.demo()
+        #expect(store.menuSettings.refresh.enabled && store.menuSettings.refresh.intervalSeconds == 600)
+        #expect(store.menuSettings.autoSwitch.claude && !store.menuSettings.autoSwitch.codex)
+        #expect(!store.menuSettings.autoSwitch.background)
+        #expect(!store.setMenuSetting("refresh", value: "off"), "the demo never writes")
+        #expect(store.menuSettings.refresh.enabled)
     }
 
     @Test("Token totals use compact units without unnecessary decimal places")

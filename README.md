@@ -7,7 +7,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/menu-dark.png">
-    <img src="docs/images/menu-light.png" alt="AI Control menu listing saved Claude Code and Codex accounts with their usage" width="440">
+    <img src="docs/images/menu-light.png" alt="AI Control menu listing saved Claude Code and Codex accounts and usage monitors with their usage" width="440">
   </picture>
 </p>
 
@@ -291,6 +291,10 @@ terminal where `NAN_API_KEY` is set also works.
 Both features are off by default. Change them in the menu (⚙ → **Usage and
 switching**), in the terminal UI (`o`), or with `aic settings set`. All three
 change the same options.
+
+<p align="center">
+  <img src="docs/images/settings.png" alt="The Usage and switching options in the menu's settings" width="440">
+</p>
 
 | Option | `aic settings set …` | Default |
 |---|---|---|
