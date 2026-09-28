@@ -88,12 +88,13 @@ struct ControlStoreTests {
     private func makeStore(
         claudeBackend: (any ClaudeLoginBackend)? = nil, codex: CodexStoreFixture? = nil,
         monitors: UsageMonitors = .init(environment: [:], readFile: { _ in throw CancellationError() },
-                                       fetch: { _ in throw CancellationError() }, now: Date.init)
+                                       fetch: { _ in throw CancellationError() }, now: Date.init),
+        settingsStore: SettingsStore? = nil
     ) -> ControlStore {
         let claude = claudeBackend.map { backend in ClaudeLoginAppAdapter(makeBackend: { backend }) }
         let codexAdapter = codex.map { fixture in CodexLoginAppAdapter(makeSystem: { fixture.system }) }
         return ControlStore(claudeLogins: claude ?? ClaudeLoginAppAdapter(), codexLogins: codexAdapter ?? CodexLoginAppAdapter(),
-                            monitors: monitors)
+                            monitors: monitors, settingsStore: settingsStore)
     }
 
     // MARK: - Claude saved logins
@@ -597,6 +598,79 @@ struct ControlStoreTests {
         #expect(renames.first?.0 == .claude && renames.first?.1 == "alpha" && renames.first?.2 == "omega")
     }
 
+    @Test("Menu controls persist engine settings and immediately update the displayed values")
+    func menuSettingsUseEngine() throws {
+        let fixture = try MenuSettingsFixture()
+        defer { fixture.cleanup() }
+        let store = makeStore(settingsStore: fixture.store)
+        #expect(store.menuSettings.autoSwitch.thresholdPercent == 99)
+        #expect(store.setMenuSetting("refresh", value: "on"))
+        #expect(store.setMenuSetting("refresh-interval", value: "600"))
+        #expect(store.setMenuSetting("auto-switch-claude", value: "on"))
+        #expect(store.setMenuSetting("auto-switch-codex", value: "on"))
+        #expect(store.setMenuSetting("auto-switch-threshold", value: "95"))
+        #expect(store.canEnableBackgroundRefresh)
+        #expect(store.setMenuSetting("background-refresh", value: "on"))
+        #expect(store.menuSettings == (try fixture.store.load()))
+        #expect(store.menuSettings.refresh.enabled && store.menuSettings.refresh.intervalSeconds == 600)
+        #expect(store.menuSettings.autoSwitch.background && store.menuSettings.autoSwitch.thresholdPercent == 95)
+        #expect(store.setMenuSetting("auto-switch-claude", value: "off"))
+        #expect(store.setMenuSetting("auto-switch-codex", value: "off"))
+        #expect(!store.canEnableBackgroundRefresh)
+        #expect(!store.setMenuSetting("background-refresh", value: "on"))
+    }
+
+    @Test("Invalid menu values preserve the file and show the engine refusal")
+    func invalidMenuValues() throws {
+        let fixture = try MenuSettingsFixture()
+        defer { fixture.cleanup() }
+        let store = makeStore(settingsStore: fixture.store)
+        #expect(!store.setMenuSetting("refresh-interval", value: "299"))
+        #expect(store.settingsNotice == "The refresh interval must be a whole number of seconds, 300 or more.")
+        #expect(!store.setMenuSetting("auto-switch-threshold", value: "101"))
+        #expect(store.settingsNotice == "The threshold must be a whole percentage between 50 and 100.")
+        #expect(store.menuSettings == AIControlSettings())
+        #expect(!FileManager.default.fileExists(atPath: fixture.store.path))
+    }
+
+    @Test("Priority rows use engine order; moves reject ends and busy providers")
+    func menuPriorityMoves() async throws {
+        let fixture = try MenuSettingsFixture()
+        defer { fixture.cleanup() }
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let codex = try CodexStoreFixture()
+        defer { codex.cleanup() }
+        let store = makeStore(claudeBackend: backend, codex: codex, settingsStore: fixture.store)
+        try await #require(store.reloadClaudeLogins()).value
+        try await #require(store.reloadCodexLogins()).value
+        #expect(store.orderedClaudeLogins.map(\.name) == ["alpha", "beta"])
+        #expect(store.orderedCodexLogins.map(\.name) == ["home", "spare", "work"])
+        #expect(!store.canMoveLogin(.claude, alias: "alpha", up: true))
+        #expect(!store.moveLogin(.claude, alias: "alpha", up: true))
+        #expect(store.moveLogin(.claude, alias: "beta", up: true))
+        #expect(store.orderedClaudeLogins.map(\.name) == ["beta", "alpha"])
+        #expect(store.moveLogin(.codex, alias: "work", up: true))
+        #expect(store.orderedCodexLogins.map(\.name) == ["home", "work", "spare"])
+        #expect(store.moveLogin(.codex, alias: "work", up: false))
+        #expect(store.orderedCodexLogins.map(\.name) == ["home", "spare", "work"])
+        let saved = try fixture.store.load()
+        let task = try #require(store.selectClaudeLogin("alpha"))
+        #expect(!store.canMoveLogin(.claude, alias: "beta", up: false))
+        #expect(!store.moveLogin(.claude, alias: "beta", up: false))
+        await task.value
+        #expect(try fixture.store.load() == saved)
+    }
+
+    @Test("Demo controls cannot write even with an injected settings store")
+    func demoMenuIsReadOnly() throws {
+        let fixture = try MenuSettingsFixture()
+        defer { fixture.cleanup() }
+        let store = ControlStore.demo(settingsStore: fixture.store)
+        #expect(!store.setMenuSetting("refresh", value: "on"))
+        #expect(!store.moveLogin(.claude, alias: "client", up: true))
+        #expect(!FileManager.default.fileExists(atPath: fixture.store.path))
+    }
+
     @Test("Provider icons come from installed apps, fall back to monograms, and never appear in the demo")
     func providerIconsComeFromInstalledApps() {
         let store = ControlStore(
@@ -634,6 +708,16 @@ struct ControlStoreTests {
         try await #require(store.recoverClaudeLogins()).value
         #expect(store.showsMenuWarning == false)
     }
+}
+
+private struct MenuSettingsFixture {
+    let store: SettingsStore
+    init() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("menu-settings-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        store = SettingsStore(directory: directory.path)
+    }
+    func cleanup() { try? FileManager.default.removeItem(atPath: store.directory) }
 }
 
 private actor MonitorFetchGate {
