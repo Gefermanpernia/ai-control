@@ -87,16 +87,21 @@ final class ControlStore: ObservableObject {
     private let claudeAdapter: ClaudeLoginAppAdapter
     private let codexAdapter: CodexLoginAppAdapter
     private let monitorSource: UsageMonitors
+    /// The engine's options; read each time the window opens, so `aic settings` changes apply on the next open.
+    private let settingsSource: () -> AIControlSettings
+    private var settings = AIControlSettings()
     let providerIcons: [CLIProvider: NSImage]
 
     init(
         claudeLogins: ClaudeLoginAppAdapter = .configured(), codexLogins: CodexLoginAppAdapter = .configured(),
         appIcon: (CLIProvider) -> NSImage? = { $0.installedAppIcon() },
-        monitors: UsageMonitors = .live
+        monitors: UsageMonitors = .live,
+        settings: @escaping () -> AIControlSettings = { AIControlSettings() }
     ) {
         claudeAdapter = claudeLogins
         codexAdapter = codexLogins
         monitorSource = monitors
+        settingsSource = settings
         providerIcons = Dictionary(uniqueKeysWithValues: CLIProvider.allCases.compactMap { provider in
             appIcon(provider).map { (provider, $0) }
         })
@@ -177,7 +182,9 @@ final class ControlStore: ObservableObject {
                          offersRecovery: true)
         }
     }
-    private var lastOpened: Date?
+    /// When usage was last loaded on open or by the timer; both count from here.
+    private var lastUsageLoad: Date?
+    private var windowIsOpen = false
     private var isDemo = false
 
     /// Example accounts for screenshots; a demo store never loads or changes real logins.
@@ -209,13 +216,36 @@ final class ControlStore: ObservableObject {
         return store
     }
 
-    /// Loads saved logins and their usage when the window opens; usage is never fetched in the background.
+    /// Loads saved logins and their usage when the window opens (at most every 30 seconds); with refresh on in
+    /// the engine settings, usage also reloads every interval while the window stays open.
     func windowOpened(now: Date = Date()) {
         guard !isDemo else { return }
+        windowIsOpen = true
+        settings = settingsSource()
         reloadClaudeLogins()
         reloadCodexLogins()
-        if let lastOpened, now.timeIntervalSince(lastOpened) < 30 { return }
-        lastOpened = now
+        if let lastUsageLoad, now.timeIntervalSince(lastUsageLoad) < 30 { return }
+        loadAllUsage(at: now)
+    }
+    func windowClosed() { windowIsOpen = false }
+    /// Periodic refresh: on in the settings, window open, nothing loading or running, and a full interval
+    /// (at least 300 seconds) since the last usage load.
+    func refreshDue(now: Date) -> Bool {
+        guard !isDemo, windowIsOpen, settings.refresh.enabled,
+              !isLoadingClaudeUsage, !isLoadingCodexUsage, !isLoadingMonitors,
+              claudeActivity == .idle, codexActivity == .idle else { return false }
+        let interval = TimeInterval(max(AIControlSettings.minimumInterval, settings.refresh.intervalSeconds))
+        return lastUsageLoad.map { now.timeIntervalSince($0) >= interval } ?? true
+    }
+    /// Called by the menu's timer; reloads usage when `refreshDue` says so.
+    @discardableResult
+    func tick(now: Date = Date()) -> Bool {
+        guard refreshDue(now: now) else { return false }
+        loadAllUsage(at: now)
+        return true
+    }
+    private func loadAllUsage(at now: Date) {
+        lastUsageLoad = now
         refreshClaudeUsage()
         refreshCodexUsage()
         refreshMonitors()
@@ -225,8 +255,8 @@ final class ControlStore: ObservableObject {
         guard !isDemo, !isLoadingMonitors else { return nil }
         isLoadingMonitors = true
         return Task { @MainActor [monitorSource] in
+            defer { isLoadingMonitors = false }
             monitors = await monitorSource.monitors(includeUsage: true)
-            isLoadingMonitors = false
         }
     }
     @discardableResult
@@ -234,8 +264,8 @@ final class ControlStore: ObservableObject {
         guard !isLoadingClaudeUsage else { return nil }
         isLoadingClaudeUsage = true
         return Task { @MainActor [claudeAdapter] in
+            defer { isLoadingClaudeUsage = false }
             claudeUsage = await claudeAdapter.usage()
-            isLoadingClaudeUsage = false
         }
     }
     @discardableResult
@@ -243,8 +273,8 @@ final class ControlStore: ObservableObject {
         guard !isLoadingCodexUsage else { return nil }
         isLoadingCodexUsage = true
         return Task { @MainActor [codexAdapter] in
+            defer { isLoadingCodexUsage = false }
             codexUsage = await codexAdapter.usage()
-            isLoadingCodexUsage = false
         }
     }
     @discardableResult
@@ -353,7 +383,7 @@ public func runAIControl() {
 }
 
 struct AIControlApp: App {
-    @StateObject private var store = ControlStore()
+    @StateObject private var store = ControlStore(settings: { (try? SettingsStore.live.load()) ?? AIControlSettings() })
 
     var body: some Scene {
         MenuBarExtra {
@@ -400,6 +430,13 @@ struct ControlView: View {
         // The menu-bar window is reused, so each time it opens it becomes key again.
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             store.windowOpened()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            store.windowClosed()
+        }
+        // Cheap check; `tick` only loads when periodic refresh is on, the window is open and an interval passed.
+        .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { now in
+            store.tick(now: now)
         }
     }
 
