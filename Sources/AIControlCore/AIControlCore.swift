@@ -283,6 +283,25 @@ final class ControlStore: ObservableObject {
             "personal": usage([("Week", 4, 140)], resets: 3),
             "work": usage([("5h", 12, 4), ("Week", 35, 90)], resets: 2)
         ]
+        // Example monitors and options: nothing is fetched, and no settings file is read or written.
+        func windows(_ values: [(String, Double, Double)]) -> LoginStatus.Usage {
+            .init(.init(windows: values.map { .init(label: $0.0, usedPercent: $0.1, resetsAt: now.addingTimeInterval($0.2 * 3600)) },
+                        resetsAvailable: nil, fetchedAt: now))
+        }
+        store.monitors = [
+            .init(id: "opencode-go", name: "OpenCode Go",
+                  usage: windows([("5h", 18, 3), ("Week", 47, 80), ("Month", 29, 400)]), error: nil),
+            .init(id: "nan", name: "NaN", usage: nil, models: [
+                .init(model: "deepseek-v4-flash", totalTokens: 812_000_000, quotaTokens: 2_000_000_000, usedPercent: 40.6,
+                      resetsAt: now.addingTimeInterval(400 * 3600)),
+                .init(model: "glm5.3", totalTokens: 38_400_000, quotaTokens: nil, usedPercent: nil, resetsAt: nil)
+            ], error: nil)
+        ]
+        var options = AIControlSettings()
+        options.refresh.enabled = true
+        options.refresh.intervalSeconds = 600
+        options.autoSwitch.claude = true
+        store.menuSettings = options
         return store
     }
 
@@ -546,7 +565,13 @@ struct ControlView: View {
     @EnvironmentObject private var store: ControlStore
     @State private var adding: CLIProvider?
 
-    init(adding: CLIProvider? = nil) { _adding = State(initialValue: adding) }
+    /// The account list scrolls past this height; README screenshots raise it to show every row.
+    private let listHeightLimit: CGFloat
+
+    init(adding: CLIProvider? = nil, listHeightLimit: CGFloat = 720) {
+        _adding = State(initialValue: adding)
+        self.listHeightLimit = listHeightLimit
+    }
     @State private var newName = ""
     @State private var newEmail = ""
     @State private var renaming: RenameTarget?
@@ -631,7 +656,7 @@ struct ControlView: View {
         }
         // The window fits its content up to a limit; beyond it the list scrolls.
         .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-        .frame(height: min(max(contentHeight, 160), 720))
+        .frame(height: min(max(contentHeight, 160), listHeightLimit))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("CLI accounts")
     }
