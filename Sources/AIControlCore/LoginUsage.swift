@@ -122,9 +122,7 @@ struct ClaudeIsolatedRenewal {
 
     func renew(_ snapshot: ClaudeLoginSnapshot) throws -> ClaudeLoginSnapshot {
         guard case .value = snapshot.claudeAiOauth, case .value = snapshot.oauthAccount else { throw Error.notALogin }
-        let directory = try FileManager.default.url(
-            for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: FileManager.default.temporaryDirectory, create: true
-        ).path
+        let directory = try PrivateTemporaryDirectory.create(prefix: "ai-control-renewal")
         defer { try? FileManager.default.removeItem(atPath: directory) }
         // Claude names the item for a custom configuration directory after the first 8 hex digits of its SHA-256.
         let digest = SHA256.hash(data: Data(directory.precomposedStringWithCanonicalMapping.utf8))

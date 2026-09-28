@@ -458,9 +458,7 @@ struct CodexIsolatedRenewal {
         tokens["access_token"] = "expired"
         root["tokens"] = tokens
         root["last_refresh"] = "2000-01-01T00:00:00Z"
-        let directory = try FileManager.default.url(
-            for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: FileManager.default.temporaryDirectory, create: true
-        ).path
+        let directory = try PrivateTemporaryDirectory.create(prefix: "ai-control-renewal")
         defer { try? FileManager.default.removeItem(atPath: directory) }
         let authPath = directory + "/auth.json"
         guard FileManager.default.createFile(
