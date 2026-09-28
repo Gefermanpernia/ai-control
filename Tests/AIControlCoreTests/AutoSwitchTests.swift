@@ -154,6 +154,35 @@ struct AutoSwitchTests {
         #expect(log.used == ["home"])
     }
 
+    @Test("Each check returns a structured outcome with exactly the line the command prints")
+    func structuredOutcomes() async {
+        let log = Log()
+        let on = settings(claude: true)
+        let spentWork = ["work": usage(99, 1), "home": usage(1, 1)]
+        let switched = await checkAutoSwitch(provider(log, current: "work", usage: spentWork), settings: on)
+        #expect(switched.kind == .claude && switched.outcome == .switched(to: "home"))
+        #expect(switched.line == "Claude: switched from work to home (work reached 99% of a usage limit).")
+        let refused = await checkAutoSwitch(provider(log, current: "work", usage: spentWork, useResult: "Blocked: busy."),
+                                            settings: on)
+        #expect(refused.outcome == .refused(to: "home"))
+        #expect(refused.line == "Claude: not switched to home. Blocked: busy.")
+        let stay = await checkAutoSwitch(provider(log, current: "home", usage: spentWork), settings: on)
+        #expect(stay.outcome == .stay && stay.line == "Claude: home is below 99%.")
+        let unknown = await checkAutoSwitch(provider(log, current: nil, usage: spentWork), settings: on)
+        #expect(unknown.outcome == .unknownCurrent)
+        #expect(unknown.line == "Claude: the account in use or its usage is unknown; nothing changed.")
+        let none = await checkAutoSwitch(provider(log, current: "work", usage: ["work": usage(99, 1), "home": usage(1, 99)]),
+                                         settings: on)
+        #expect(none.outcome == .noCandidate)
+        #expect(none.line == "Claude: no other account is below 99% on every limit; nothing changed.")
+        let off = await checkAutoSwitch(provider(log, current: "work", usage: spentWork), settings: settings(claude: false))
+        #expect(off.outcome == .off && off.line == "Claude: automatic switching is off.")
+        let unreadable = await checkAutoSwitch(AutoSwitchProvider(name: "Codex", kind: .codex, accounts: { nil },
+                                                                  usage: { [:] }, use: { _ in nil }),
+                                               settings: { var codex = AIControlSettings(); codex.autoSwitch.codex = true; return codex }())
+        #expect(unreadable.outcome == .unreadable && unreadable.line == "Codex: saved accounts could not be read.")
+    }
+
     // MARK: - Stored order
 
     @Test("The order is stored in the settings, keeps only valid names, and follows a rename")

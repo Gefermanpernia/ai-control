@@ -89,6 +89,46 @@ struct AutoSwitchProvider: Sendable {
     }
 }
 
+/// What one provider's automatic switch check did. `line` is exactly what `aic auto-switch check` prints for
+/// it, so interfaces can decide on `outcome` without parsing the text.
+struct AutoSwitchReport: Equatable, Sendable {
+    enum Outcome: Equatable, Sendable {
+        case off, unreadable, stay, unknownCurrent, noCandidate
+        case switched(to: String)
+        case refused(to: String)
+    }
+    let kind: AIControlSettings.Provider
+    let outcome: Outcome
+    let line: String
+}
+
+/// Checks one provider and switches it when its automatic switching is on and the account in use is spent.
+func checkAutoSwitch(_ provider: AutoSwitchProvider, settings: AIControlSettings) async -> AutoSwitchReport {
+    func report(_ outcome: AutoSwitchReport.Outcome, _ text: String) -> AutoSwitchReport {
+        .init(kind: provider.kind, outcome: outcome, line: "\(provider.name): \(text)")
+    }
+    guard settings.switching(provider.kind) else { return report(.off, "automatic switching is off.") }
+    guard let listed = await provider.accounts() else { return report(.unreadable, "saved accounts could not be read.") }
+    let threshold = settings.autoSwitch.thresholdPercent
+    let usage = await provider.usage()
+    switch AutoSwitchPlanner.decide(current: listed.current, accounts: listed.accounts, usage: usage,
+                                    order: settings.order(provider.kind), threshold: threshold) {
+    case .stay:
+        return report(.stay, "\(listed.current ?? "the current account") is below \(threshold)%.")
+    case .unknownCurrent:
+        return report(.unknownCurrent, "the account in use or its usage is unknown; nothing changed.")
+    case .noCandidate:
+        return report(.noCandidate, "no other account is below \(threshold)% on every limit; nothing changed.")
+    case .switchTo(let next):
+        let current = listed.current ?? "the current account"
+        if let refusal = await provider.use(next) {
+            return report(.refused(to: next), "not switched to \(next). \(refusal)")
+        }
+        return report(.switched(to: next),
+                      "switched from \(current) to \(next) (\(current) reached \(threshold)% of a usage limit).")
+    }
+}
+
 /// Checks every provider once and switches the ones with automatic switching on; one line per provider.
 /// A background check (a timer with no interface open) runs only while background refresh is on too.
 func runAutoSwitchCheck(providers: [AutoSwitchProvider], settings: AIControlSettings, background: Bool = false,
@@ -98,34 +138,12 @@ func runAutoSwitchCheck(providers: [AutoSwitchProvider], settings: AIControlSett
         return 0
     }
     var status: Int32 = 0
-    let threshold = settings.autoSwitch.thresholdPercent
     for provider in providers {
-        guard settings.switching(provider.kind) else {
-            output("\(provider.name): automatic switching is off.")
-            continue
-        }
-        guard let listed = await provider.accounts() else {
-            output("\(provider.name): saved accounts could not be read.")
-            status = 3
-            continue
-        }
-        let usage = await provider.usage()
-        switch AutoSwitchPlanner.decide(current: listed.current, accounts: listed.accounts, usage: usage,
-                                        order: settings.order(provider.kind), threshold: threshold) {
-        case .stay:
-            output("\(provider.name): \(listed.current ?? "the current account") is below \(threshold)%.")
-        case .unknownCurrent:
-            output("\(provider.name): the account in use or its usage is unknown; nothing changed.")
-        case .noCandidate:
-            output("\(provider.name): no other account is below \(threshold)% on every limit; nothing changed.")
-        case .switchTo(let next):
-            let current = listed.current ?? "the current account"
-            if let refusal = await provider.use(next) {
-                output("\(provider.name): not switched to \(next). \(refusal)")
-                status = 3
-            } else {
-                output("\(provider.name): switched from \(current) to \(next) (\(current) reached \(threshold)% of a usage limit).")
-            }
+        let report = await checkAutoSwitch(provider, settings: settings)
+        output(report.line)
+        switch report.outcome {
+        case .unreadable, .refused: status = 3
+        default: break
         }
     }
     return status

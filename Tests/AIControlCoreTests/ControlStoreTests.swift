@@ -693,6 +693,26 @@ struct ControlStoreTests {
         #expect(try fixture.store.load().order(.claude) == ["beta", "alpha"])
     }
 
+    @Test("Switch and refusal notices always show; an unchanged unknown or no-candidate result shows once")
+    func autoSwitchNoticesDoNotRepeat() {
+        let store = makeStore()
+        let unknown = AutoSwitchReport(kind: .claude, outcome: .unknownCurrent, line: "Claude: unknown.")
+        #expect(store.autoSwitchNotice(for: unknown)?.text == "Claude: unknown.")
+        #expect(store.autoSwitchNotice(for: unknown) == nil)
+        #expect(store.autoSwitchNotice(for: .init(kind: .claude, outcome: .stay, line: "Claude: fine.")) == nil)
+        #expect(store.autoSwitchNotice(for: unknown)?.text == "Claude: unknown.")
+        let none = AutoSwitchReport(kind: .codex, outcome: .noCandidate, line: "Codex: none.")
+        #expect(store.autoSwitchNotice(for: none)?.text == "Codex: none.")
+        #expect(store.autoSwitchNotice(for: none) == nil)
+        let switched = AutoSwitchReport(kind: .claude, outcome: .switched(to: "home"), line: "Claude: switched.")
+        #expect(store.autoSwitchNotice(for: switched)?.text == "Claude: switched.")
+        #expect(store.autoSwitchNotice(for: switched)?.text == "Claude: switched.")
+        let refused = AutoSwitchReport(kind: .codex, outcome: .refused(to: "work"), line: "Codex: refused.")
+        #expect(store.autoSwitchNotice(for: refused)?.text == "Codex: refused.")
+        #expect(store.autoSwitchNotice(for: refused)?.text == "Codex: refused.")
+        #expect(store.autoSwitchNotice(for: .init(kind: .codex, outcome: .off, line: "Codex: off.")) == nil)
+    }
+
     @Test("Demo controls cannot write even with an injected settings store")
     func demoMenuIsReadOnly() throws {
         let fixture = try MenuSettingsFixture()
