@@ -86,11 +86,14 @@ struct ControlStoreTests {
     // MARK: - Helpers
 
     private func makeStore(
-        claudeBackend: (any ClaudeLoginBackend)? = nil, codex: CodexStoreFixture? = nil
+        claudeBackend: (any ClaudeLoginBackend)? = nil, codex: CodexStoreFixture? = nil,
+        monitors: UsageMonitors = .init(environment: [:], readFile: { _ in throw CancellationError() },
+                                       fetch: { _ in throw CancellationError() }, now: Date.init)
     ) -> ControlStore {
         let claude = claudeBackend.map { backend in ClaudeLoginAppAdapter(makeBackend: { backend }) }
         let codexAdapter = codex.map { fixture in CodexLoginAppAdapter(makeSystem: { fixture.system }) }
-        return ControlStore(claudeLogins: claude ?? ClaudeLoginAppAdapter(), codexLogins: codexAdapter ?? CodexLoginAppAdapter())
+        return ControlStore(claudeLogins: claude ?? ClaudeLoginAppAdapter(), codexLogins: codexAdapter ?? CodexLoginAppAdapter(),
+                            monitors: monitors)
     }
 
     // MARK: - Claude saved logins
@@ -278,6 +281,54 @@ struct ControlStoreTests {
 
     // MARK: - Usage, rename and add
 
+    @Test("Opening loads monitors in source order, throttles for 30 seconds, and rejects concurrent refreshes")
+    func monitorRefreshIsThrottledAndSerialized() async throws {
+        let gate = MonitorFetchGate()
+        let source = UsageMonitors(
+            environment: ["OPENCODE_AUTH_CONTENT": #"{"opencode-go":{"type":"api","key":"synthetic"}}"#,
+                          "NAN_API_KEY": "synthetic"],
+            readFile: { _ in Issue.record("Unexpected login file access"); return Data() },
+            fetch: { request in await gate.fetch(request) }, now: Date.init
+        )
+        let store = makeStore(monitors: source)
+        let opened = Date()
+        store.windowOpened(now: opened)
+        await gate.waitForFirstRequest()
+        #expect(store.isLoadingMonitors)
+        #expect(store.refreshMonitors() == nil)
+        store.windowOpened(now: opened.addingTimeInterval(10))
+        await gate.releaseFirstRequest()
+        while store.isLoadingMonitors { await Task.yield() }
+        #expect(await gate.count == 2)
+        #expect(store.monitors.map(\.id) == ["opencode-go", "nan"])
+        #expect(store.monitors[0].usage?.windows.first?.label == "5h")
+        #expect(store.monitors[1].models?.first?.model == "deepseek-v4-flash")
+        store.windowOpened(now: opened.addingTimeInterval(31))
+        while store.isLoadingMonitors { await Task.yield() }
+        #expect(await gate.count == 4)
+    }
+
+    @Test("The screenshot demo never fetches monitors, even on manual refresh")
+    func demoDoesNotFetchMonitors() async {
+        let gate = MonitorFetchGate()
+        let source = UsageMonitors(environment: ["NAN_API_KEY": "synthetic"],
+                                   readFile: { _ in Issue.record("Unexpected login file access"); return Data() },
+                                   fetch: { request in await gate.fetch(request) }, now: Date.init)
+        let store = ControlStore.demo(monitors: source)
+        store.windowOpened()
+        #expect(store.refreshMonitors() == nil)
+        #expect(store.monitors.isEmpty && !store.isLoadingMonitors)
+        #expect(await gate.count == 0)
+    }
+
+    @Test("Token totals use compact units without unnecessary decimal places")
+    func compactTokenTotals() {
+        #expect(TokenCountFormatter.compact(950_000) == "950K")
+        #expect(TokenCountFormatter.compact(1_200_000_000) == "1.2B")
+        #expect(TokenCountFormatter.compact(3_000_000_000) == "3B")
+        #expect(TokenCountFormatter.compact(999) == "999")
+    }
+
     @Test("Usage loads after the list, per saved login")
     func usageLoadsPerLogin() async throws {
         let backend = try SavedLoginBackend(betaUsable: true)
@@ -377,6 +428,35 @@ struct ControlStoreTests {
 
         try await #require(store.recoverClaudeLogins()).value
         #expect(store.showsMenuWarning == false)
+    }
+}
+
+private actor MonitorFetchGate {
+    private(set) var count = 0
+    private var firstRequest: CheckedContinuation<Void, Never>?
+    private var firstResponse: CheckedContinuation<Void, Never>?
+
+    func waitForFirstRequest() async {
+        if count > 0 { return }
+        await withCheckedContinuation { firstRequest = $0 }
+    }
+
+    func releaseFirstRequest() {
+        firstResponse?.resume()
+        firstResponse = nil
+    }
+
+    func fetch(_ request: URLRequest) async -> (Int, Data) {
+        count += 1
+        if count == 1 {
+            firstRequest?.resume()
+            firstRequest = nil
+            await withCheckedContinuation { firstResponse = $0 }
+        }
+        if request.url?.host == "opencode.ai" {
+            return (200, Data(#"{"usage":{"rolling":{"percent":42}}}"#.utf8))
+        }
+        return (200, Data(#"{"totals":{"by_model":[{"model":"deepseek-v4-flash","total_tokens":1200000000}]}}"#.utf8))
     }
 }
 
