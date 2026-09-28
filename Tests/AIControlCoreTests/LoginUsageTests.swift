@@ -73,6 +73,7 @@ struct ClaudeIsolatedRenewalTests {
             claudeExecutable: "/fake/claude", keychainAccount: "me", item: { service, _ in items.item(service) },
             run: { _, arguments, environment, directory in
                 seen = (arguments, environment, try? String(contentsOfFile: directory + "/.claude.json", encoding: .utf8))
+                #expect(privateThrowaway(directory))
                 let service = items.services.first!
                 #expect(String(decoding: items.data[service] ?? Data(), as: UTF8.self).contains(#""expiresAt":0"#))
                 items.data[service] = Data(#"{"claudeAiOauth":{"accessToken":"a2","refreshToken":"r2","expiresAt":4102444800000}}"#.utf8)
@@ -381,6 +382,7 @@ struct CodexIsolatedRenewalTests {
         var seen: (arguments: [String], home: String?, copy: String?)?
         let renewal = CodexIsolatedRenewal(codexExecutable: "/fake/codex", run: { _, arguments, environment, _ in
             let home = environment["CODEX_HOME"] ?? ""
+            #expect(privateThrowaway(home))
             seen = (arguments, home, try? String(contentsOfFile: home + "/auth.json", encoding: .utf8))
             try Data(#"{"auth_mode":"chatgpt","last_refresh":"2026-09-27T00:00:00Z","tokens":{"id_token":"h.e30.s","access_token":"new","refresh_token":"r2","account_id":"acct-a"}}"#.utf8)
                 .write(to: URL(fileURLWithPath: home + "/auth.json"))
@@ -407,5 +409,27 @@ struct CodexIsolatedRenewalTests {
             return 0
         })
         #expect(throws: CodexIsolatedRenewal.Error.accountChanged) { try foreign.renew(login) }
+    }
+}
+
+/// A renewal directory must have an unpredictable name and be reachable only by its owner, because it holds
+/// a copy of a saved login.
+private func privateThrowaway(_ directory: String) -> Bool {
+    let name = (directory as NSString).lastPathComponent
+    let mode = (try? FileManager.default.attributesOfItem(atPath: directory))?[.posixPermissions] as? Int
+    return name.hasPrefix("ai-control-renewal.") && name.count > "ai-control-renewal.".count + 5 && mode == 0o700
+}
+
+struct PrivateTemporaryDirectoryTests {
+    @Test("Each renewal directory is new, owner-only and removed by its owner")
+    func uniqueOwnerOnly() throws {
+        let first = try PrivateTemporaryDirectory.create(prefix: "ai-control-renewal")
+        let second = try PrivateTemporaryDirectory.create(prefix: "ai-control-renewal")
+        defer {
+            try? FileManager.default.removeItem(atPath: first)
+            try? FileManager.default.removeItem(atPath: second)
+        }
+        #expect(first != second)
+        #expect(privateThrowaway(first) && privateThrowaway(second))
     }
 }
