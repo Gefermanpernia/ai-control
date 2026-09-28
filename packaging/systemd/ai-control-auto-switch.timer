@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh AI Control usage in the background
+
+[Timer]
+OnBootSec=2min
+# Five minutes is the minimum refresh interval.
+OnUnitActiveSec=5min
+Unit=ai-control-auto-switch.service
+
+[Install]
+WantedBy=timers.target

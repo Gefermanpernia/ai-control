@@ -114,8 +114,33 @@ extension SettingsStore {
     }
 }
 
+private func runSystemdUser(_ arguments: [String]) -> Int32? {
+    let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+    guard let executable = paths.map({ $0 + "/systemctl" }).first(where: FileManager.default.isExecutableFile(atPath:)) else {
+        return nil
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = ["--user"] + arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    } catch { return nil }
+}
+
+#if os(Linux)
+private let hasLinuxSystemd = true
+#else
+private let hasLinuxSystemd = false
+#endif
+
 /// `settings` prints the options as JSON; `settings set <key> <value>` changes one of them.
-func runSettings(arguments: [String], store: SettingsStore = .live, output: (String) -> Void) -> Int32 {
+func runSettings(arguments: [String], store: SettingsStore = .live,
+                 systemdUser: ([String]) -> Int32? = runSystemdUser, linuxSystemd: Bool = hasLinuxSystemd,
+                 output: (String) -> Void) -> Int32 {
     let usage = "Usage: AIControl settings [set refresh|auto-switch-claude|auto-switch-codex|background-refresh on|off" +
         " | set refresh-interval <seconds> | set auto-switch-threshold <percent>]"
     if arguments == ["settings"] {
@@ -152,8 +177,23 @@ func runSettings(arguments: [String], store: SettingsStore = .live, output: (Str
     default: output(usage); return 2
     }
     do {
-        try store.update(change)
+        var transition: Bool?
+        try store.update { settings in
+            let wasActive = settings.backgroundRefreshActive
+            change(&settings)
+            if wasActive != settings.backgroundRefreshActive { transition = settings.backgroundRefreshActive }
+        }
         output("Saved.")
+        if linuxSystemd, let enabled = transition {
+            let action = enabled ? "enable" : "disable"
+            let args = [action, "--now", "ai-control-auto-switch.timer"]
+            if systemdUser(args) == 0 {
+                output(enabled ? "Background checks enabled." : "Background checks disabled.")
+            } else {
+                output("Background checks were saved, but the systemd user timer could not be changed " +
+                       "(systemd is not available here, for example on WSL). Run: systemctl --user \(args.joined(separator: " "))")
+            }
+        }
         return 0
     } catch {
         output("Blocked: settings could not be saved.")
