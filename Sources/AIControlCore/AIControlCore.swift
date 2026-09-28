@@ -78,20 +78,25 @@ final class ControlStore: ObservableObject {
     @Published private(set) var codexNotice: ClaudeLoginNotice?
     @Published private(set) var claudeUsage: [String: LoginUsageResult] = [:]
     @Published private(set) var codexUsage: [String: LoginUsageResult] = [:]
+    @Published private(set) var monitors: [LoginStatus.Monitor] = []
+    @Published private(set) var isLoadingMonitors = false
     @Published private(set) var isLoadingClaudeUsage = false
     @Published private(set) var isLoadingCodexUsage = false
     @Published var isShowingSettings = false
     @Published var appearance: Appearance = .system
     private let claudeAdapter: ClaudeLoginAppAdapter
     private let codexAdapter: CodexLoginAppAdapter
+    private let monitorSource: UsageMonitors
     let providerIcons: [CLIProvider: NSImage]
 
     init(
         claudeLogins: ClaudeLoginAppAdapter = .configured(), codexLogins: CodexLoginAppAdapter = .configured(),
-        appIcon: (CLIProvider) -> NSImage? = { $0.installedAppIcon() }
+        appIcon: (CLIProvider) -> NSImage? = { $0.installedAppIcon() },
+        monitors: UsageMonitors = .live
     ) {
         claudeAdapter = claudeLogins
         codexAdapter = codexLogins
+        monitorSource = monitors
         providerIcons = Dictionary(uniqueKeysWithValues: CLIProvider.allCases.compactMap { provider in
             appIcon(provider).map { (provider, $0) }
         })
@@ -176,9 +181,10 @@ final class ControlStore: ObservableObject {
     private var isDemo = false
 
     /// Example accounts for screenshots; a demo store never loads or changes real logins.
-    static func demo(now: Date = Date()) -> ControlStore {
+    static func demo(now: Date = Date(), monitors: UsageMonitors = .live) -> ControlStore {
         // Screenshots stay free of provider logos, so the demo never shows installed app icons.
-        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(), codexLogins: CodexLoginAppAdapter(), appIcon: { _ in nil })
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(), codexLogins: CodexLoginAppAdapter(),
+                                 appIcon: { _ in nil }, monitors: monitors)
         store.isDemo = true
         func usage(_ windows: [(String, Double, Double)], resets: Int? = nil) -> LoginUsageResult {
             .usage(.init(windows: windows.map { .init(label: $0.0, usedPercent: $0.1, resetsAt: now.addingTimeInterval($0.2 * 3600)) },
@@ -212,6 +218,16 @@ final class ControlStore: ObservableObject {
         lastOpened = now
         refreshClaudeUsage()
         refreshCodexUsage()
+        refreshMonitors()
+    }
+    @discardableResult
+    func refreshMonitors() -> Task<Void, Never>? {
+        guard !isDemo, !isLoadingMonitors else { return nil }
+        isLoadingMonitors = true
+        return Task { @MainActor [monitorSource] in
+            monitors = await monitorSource.monitors(includeUsage: true)
+            isLoadingMonitors = false
+        }
     }
     @discardableResult
     func refreshClaudeUsage() -> Task<Void, Never>? {
@@ -417,19 +433,20 @@ struct ControlView: View {
         ScrollView {
             VStack(spacing: 12) {
                 loginSection(.claude, loading: store.claudeActivity == .loading || store.isLoadingClaudeUsage,
-                             canAdd: store.claudeActivity == .idle, reload: { store.reloadClaudeLogins(); store.refreshClaudeUsage() }) {
+                             canAdd: store.claudeActivity == .idle, reload: { store.reloadClaudeLogins(); store.refreshClaudeUsage(); store.refreshMonitors() }) {
                     claudeContent
                     signInArea(.claude)
                 } notice: {
                     store.claudeNotice.map { noticeView($0, recover: { store.recoverClaudeLogins() }) }
                 }
                 loginSection(.codex, loading: store.codexActivity == .loading || store.isLoadingCodexUsage,
-                             canAdd: store.codexActivity == .idle, reload: { store.reloadCodexLogins(); store.refreshCodexUsage() }) {
+                             canAdd: store.codexActivity == .idle, reload: { store.reloadCodexLogins(); store.refreshCodexUsage(); store.refreshMonitors() }) {
                     codexContent
                     signInArea(.codex)
                 } notice: {
                     store.codexNotice.map { noticeView($0, recover: nil) }
                 }
+                if !store.monitors.isEmpty { monitorSection }
             }
             .padding(12)
             .background(GeometryReader { Color.clear.preference(key: ContentHeightKey.self, value: $0.size.height) })
@@ -488,6 +505,52 @@ struct ControlView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
             notice()
+        }
+    }
+
+    private var monitorSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Monitors").font(.caption.weight(.semibold))
+                Spacer()
+                if store.isLoadingMonitors { ProgressView().controlSize(.small).accessibilityLabel("Loading monitors") }
+            }
+            VStack(spacing: 4) {
+                ForEach(store.monitors, id: \.id) { monitor in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(monitor.name).font(.body.weight(.medium))
+                        if let error = monitor.error {
+                            Text(error).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if let windows = monitor.usage?.windows {
+                            ForEach(windows, id: \.label) { window in
+                                UsageWindowBar(label: window.label, usedPercent: window.usedPercent, resetsAt: window.resetsAt)
+                            }
+                        }
+                        if let models = monitor.models {
+                            if models.isEmpty {
+                                Text("No usage this month").font(.caption2).foregroundStyle(.secondary)
+                            } else {
+                                ForEach(models, id: \.model) { model in
+                                    if let percent = model.usedPercent {
+                                        UsageWindowBar(label: model.model, usedPercent: percent, resetsAt: model.resetsAt)
+                                    } else {
+                                        Text("\(model.model) · \(TokenCountFormatter.compact(model.totalTokens)) tokens")
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                            .accessibilityLabel("\(model.model), \(TokenCountFormatter.compact(model.totalTokens)) tokens")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(monitor.name)
+                }
+            }
+            .padding(4)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
         }
     }
 
@@ -705,17 +768,6 @@ private struct ContentHeightKey: PreferenceKey {
 }
 
 struct SavedLoginRow: View {
-    private static let time: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter
-    }()
-    private static let day: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.setLocalizedDateFormatFromTemplate("EEE j:mm")
-        return formatter
-    }()
-
     let name: String
     let detail: String
     let symbol: String
@@ -772,7 +824,9 @@ extension SavedLoginRow {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(known + extra, id: \.self) { label in
                     Group {
-                        if let window = usage.windows.first(where: { $0.label == label }) { windowView(window) } else { Color.clear }
+                        if let window = usage.windows.first(where: { $0.label == label }) {
+                            UsageWindowBar(label: window.label, usedPercent: window.usedPercent, resetsAt: window.resetsAt)
+                        } else { Color.clear }
                     }
                     .frame(width: 138, alignment: .leading)
                 }
@@ -784,9 +838,37 @@ extension SavedLoginRow {
         }
     }
 
-    private func windowView(_ window: LoginUsage.Window) -> some View {
+}
+
+struct TokenCountFormatter {
+    static func compact(_ tokens: Int) -> String {
+        for (threshold, unit) in [(1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")] where tokens >= threshold {
+            let value = Double(tokens) / Double(threshold)
+            return String(format: value < 10 && value.rounded() != value ? "%.1f%@" : "%.0f%@", value, unit)
+        }
+        return String(tokens)
+    }
+}
+
+private struct UsageWindowBar: View {
+    private static let time: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }()
+    private static let day: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("EEE j:mm")
+        return formatter
+    }()
+
+    let label: String
+    let usedPercent: Double
+    let resetsAt: Date?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("\(window.label) \(Int(window.usedPercent.rounded()))%\(Self.reset(window.resetsAt))")
+            Text("\(label) \(Int(usedPercent.rounded()))%\(Self.reset(resetsAt))")
                 .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.85)
             // A drawn bar keeps its color when the menu is not the key window, unlike the native indicator.
@@ -794,14 +876,14 @@ extension SavedLoginRow {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.secondary.opacity(0.2))
                     Capsule()
-                        .fill(window.usedPercent >= 90 ? Color.red : window.usedPercent >= 70 ? Color.orange : Color.accentColor)
-                        .frame(width: max(4, proxy.size.width * min(window.usedPercent, 100) / 100))
+                        .fill(usedPercent >= 90 ? Color.red : usedPercent >= 70 ? Color.orange : Color.accentColor)
+                        .frame(width: max(4, proxy.size.width * min(max(usedPercent, 0), 100) / 100))
                 }
             }
             .frame(height: 5)
             .accessibilityElement()
-            .accessibilityLabel(Text("\(window.label) usage"))
-            .accessibilityValue(Text("\(Int(window.usedPercent.rounded())) percent"))
+            .accessibilityLabel(Text("\(label) usage"))
+            .accessibilityValue(Text("\(Int(usedPercent.rounded())) percent"))
         }
     }
 
