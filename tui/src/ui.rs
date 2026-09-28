@@ -381,7 +381,16 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
     } else {
         Style::default()
     };
-    let updated = format!("updated {updated}");
+    let refresh = &app.status.settings.refresh;
+    let updated = if refresh.enabled {
+        let minutes = refresh
+            .interval_seconds
+            .max(crate::status::minimum_interval())
+            / 60;
+        format!("updated {updated} · every {minutes} min")
+    } else {
+        format!("updated {updated}")
+    };
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(key_hints(usize::from(area.width), &updated)),
@@ -670,6 +679,17 @@ mod tests {
         assert!(
             narrow.contains("q quit") && narrow.contains("updated"),
             "{narrow}"
+        );
+    }
+    #[test]
+    fn footer_names_the_refresh_interval_when_it_is_on() {
+        let s = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]},"settings":{"refresh":{"enabled":true,"intervalSeconds":600}}}"#;
+        let app = App::new(parse(s).unwrap());
+        let buffer = rendered(&app, 160, 12, OffsetDateTime::UNIX_EPOCH);
+        let line = row(&buffer, buffer.area.height - 2);
+        assert!(
+            line.contains("updated not yet loaded · every 10 min"),
+            "{line}"
         );
     }
     #[test]

@@ -66,6 +66,34 @@ pub struct Status {
     pub codex: Provider<CodexLogin>,
     #[serde(default)]
     pub monitors: Vec<Monitor>,
+    /// Options the engine stores; engines before 0.5 do not send them, which means everything off.
+    #[serde(default)]
+    pub settings: Settings,
+}
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Settings {
+    #[serde(default)]
+    pub refresh: Refresh,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Refresh {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "minimum_interval")]
+    pub interval_seconds: i64,
+}
+impl Default for Refresh {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_seconds: minimum_interval(),
+        }
+    }
+}
+/// The shortest refresh interval the engine accepts; also enforced here for older or edited files.
+pub fn minimum_interval() -> i64 {
+    300
 }
 fn installed_by_default() -> bool {
     true

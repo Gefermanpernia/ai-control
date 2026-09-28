@@ -71,6 +71,10 @@ pub struct App {
     /// The last status read failed, so an unavailable provider may only mean the status is unknown.
     pub status_failed: bool,
     pub updated: Option<time::OffsetDateTime>,
+    /// When the last usage load started, successful or not; periodic refresh counts from here.
+    pub usage_requested: Option<time::OffsetDateTime>,
+    /// A switch, rename, save or sign-in is running; nothing else may start meanwhile.
+    pub action_running: bool,
 }
 impl App {
     pub fn new(status: Status) -> Self {
@@ -88,6 +92,8 @@ impl App {
             status_loaded: true,
             status_failed: false,
             updated: None,
+            usage_requested: None,
+            action_running: false,
         };
         app.provider = app.visible().first().copied().unwrap_or(0);
         app
@@ -145,18 +151,45 @@ impl App {
         }
         .into();
         self.action_success = None;
+        self.action_running = true;
     }
     pub fn result(&mut self, text: &str, success: bool) {
+        self.action_running = false;
         self.message = text.into();
         self.action_success = Some(success);
         self.mode = Mode::Normal;
         self.target = None;
         self.input.clear();
     }
+    /// Marks a usage load as started, for the loading state and the refresh timer.
+    pub fn start_usage_load(&mut self, now: time::OffsetDateTime) {
+        self.loading = Some(Loading::Usage);
+        self.usage_requested = Some(now);
+    }
+    /// Periodic refresh: only when the engine settings enable it, a full interval after the last usage load,
+    /// and never while something loads, an action runs, or the user is answering a prompt.
+    pub fn refresh_due(&self, now: time::OffsetDateTime) -> bool {
+        let refresh = &self.status.settings.refresh;
+        if !refresh.enabled
+            || self.loading.is_some()
+            || self.mode != Mode::Normal
+            || self.action_running
+        {
+            return false;
+        }
+        let interval = time::Duration::seconds(
+            refresh
+                .interval_seconds
+                .max(crate::status::minimum_interval()),
+        );
+        self.usage_requested
+            .is_none_or(|last| now - last >= interval)
+    }
     pub fn status_error(&mut self, error: &str) {
         self.loading = None;
         self.status_loaded = true;
-        self.status_failed = true;
+        // After a good read, a failed refresh keeps the last status on screen with its age.
+        self.status_failed = self.updated.is_none();
         self.message = error.into();
         self.action_success = Some(false);
     }

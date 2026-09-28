@@ -406,3 +406,65 @@ fn ctrl_c_quits_from_every_mode_and_is_never_typed() {
         assert!(!app.input.contains('c'));
     }
 }
+
+const REFRESHING: &str = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[{"name":"a","needsLogin":false}]},"codex":{"available":true,"installed":true,"logins":[]},"settings":{"refresh":{"enabled":true,"intervalSeconds":600}}}"#;
+fn at(seconds: i64) -> time::OffsetDateTime {
+    time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(seconds)
+}
+
+#[test]
+fn periodic_refresh_is_off_unless_the_engine_settings_enable_it() {
+    let mut app = two_logins();
+    app.start_usage_load(at(0));
+    app.apply_status(parse(TWO_LOGINS).unwrap(), true);
+    assert!(!app.refresh_due(at(100_000)));
+}
+#[test]
+fn periodic_refresh_waits_one_interval_after_the_last_usage_load() {
+    let mut app = App::new(parse(REFRESHING).unwrap());
+    assert!(app.refresh_due(at(0)), "no usage loaded yet");
+    app.start_usage_load(at(0));
+    assert!(!app.refresh_due(at(10)), "still loading");
+    app.apply_status(parse(REFRESHING).unwrap(), true);
+    assert!(!app.refresh_due(at(599)));
+    assert!(app.refresh_due(at(600)));
+}
+#[test]
+fn periodic_refresh_never_interrupts_a_prompt_or_an_action() {
+    let mut app = App::new(parse(REFRESHING).unwrap());
+    app.start_usage_load(at(0));
+    app.apply_status(parse(REFRESHING).unwrap(), true);
+    app.key(Key::Char('n'));
+    assert_eq!(app.mode, Mode::Rename);
+    assert!(!app.refresh_due(at(10_000)));
+    app.key(Key::Esc);
+    app.start_action("use");
+    assert!(!app.refresh_due(at(10_000)));
+    app.result("Switched", true);
+    assert!(app.refresh_due(at(10_000)));
+}
+#[test]
+fn intervals_below_the_minimum_are_raised_to_five_minutes() {
+    let short = REFRESHING.replace("600", "30");
+    let mut app = App::new(parse(&short).unwrap());
+    app.start_usage_load(at(0));
+    app.apply_status(parse(&short).unwrap(), true);
+    assert!(!app.refresh_due(at(299)));
+    assert!(app.refresh_due(at(300)));
+}
+#[test]
+fn a_failed_refresh_keeps_the_last_usage_on_screen() {
+    let mut app = App::new(parse(REFRESHING).unwrap());
+    app.start_usage_load(at(0));
+    app.apply_status(parse(REFRESHING).unwrap(), true);
+    app.start_usage_load(at(600));
+    app.status_error("offline");
+    assert!(!app.status_failed);
+    assert_eq!(app.status.claude.logins.len(), 1);
+    assert_eq!(app.message, "offline");
+    assert!(
+        !app.refresh_due(at(1199)),
+        "a failure waits a full interval too"
+    );
+    assert!(app.refresh_due(at(1200)));
+}
