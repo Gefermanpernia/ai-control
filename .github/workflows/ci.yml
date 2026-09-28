@@ -61,7 +61,12 @@ jobs:
           for image in debian:bookworm-slim debian:trixie-slim ubuntu:22.04 ubuntu:24.04; do
             docker run --rm -e DEB -v "$PWD/dist":/dist:ro "$image" sh -ec '
               apt-get update -qq
-              apt-get install -y -qq "/dist/$DEB"
+              apt-get install -y -qq "/dist/$DEB" systemd
+              for unit in ai-control-auto-switch.service ai-control-auto-switch.timer; do
+                test -f "/usr/lib/systemd/user/$unit"
+                systemd-analyze verify "/usr/lib/systemd/user/$unit"
+              done
+              test ! -e /usr/lib/systemd/user/timers.target.wants/ai-control-auto-switch.timer
               aic status --json | grep -q '\''"version":1'\''
               aic-tui --help
               # First Codex use on a clean system reaches sign-in (no codex installed here) instead of
@@ -98,6 +103,8 @@ jobs:
             chown -R builder:builder /build
             su builder -s /bin/sh -c "cd /build && makepkg --noconfirm"
             pacman -U --noconfirm /build/ai-control-0.0.0-1-x86_64.pkg.tar.zst
+            test -f /usr/lib/systemd/user/ai-control-auto-switch.service
+            test -f /usr/lib/systemd/user/ai-control-auto-switch.timer
             aic status --json | grep -q '\''"version":1'\''
             aic-tui --help
             export XDG_DATA_HOME=$(mktemp -d)/share

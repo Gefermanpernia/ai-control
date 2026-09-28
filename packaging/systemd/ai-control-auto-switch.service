@@ -1,0 +1,6 @@
+[Unit]
+Description=Check AI Control usage and switch saved logins in the background
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/aic auto-switch check --background

@@ -60,6 +60,79 @@ struct SettingsTests {
         #expect(!FileManager.default.fileExists(atPath: store.path))
     }
 
+    @Test("Timer follows effective background state, not unrelated settings changes")
+    func timerTransitions() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var calls: [[String]] = []
+        func set(_ key: String, _ value: String) -> (Int32, [String]) {
+            var lines: [String] = []
+            let code = runSettings(arguments: ["settings", "set", key, value], store: store,
+                                   systemdUser: { calls.append($0); return 0 }, linuxSystemd: true,
+                                   output: { lines.append($0) })
+            return (code, lines)
+        }
+        #expect(set("background-refresh", "on").1 == ["Saved."])
+        #expect(set("refresh-interval", "600").1 == ["Saved."])
+        #expect(set("auto-switch-claude", "on").1 == ["Saved.", "Background checks enabled."])
+        #expect(calls == [["enable", "--now", "ai-control-auto-switch.timer"]])
+        #expect(set("auto-switch-threshold", "90").1 == ["Saved."])
+        #expect(set("auto-switch-codex", "on").1 == ["Saved."])
+        #expect(set("auto-switch-claude", "off").1 == ["Saved."])
+        #expect(set("background-refresh", "off").1 == ["Saved.", "Background checks disabled."])
+        #expect(calls == [["enable", "--now", "ai-control-auto-switch.timer"],
+                          ["disable", "--now", "ai-control-auto-switch.timer"]])
+        #expect(set("background-refresh", "on").0 == 0)
+        #expect(set("auto-switch-codex", "off").1 == ["Saved.", "Background checks disabled."])
+    }
+
+    @Test("Unavailable or failing timer is advisory after settings have been saved")
+    func timerFailureIsSoft() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try store.update { $0.autoSwitch.background = true }
+        for result: Int32? in [nil, 1] {
+            var lines: [String] = []
+            let code = runSettings(arguments: ["settings", "set", "auto-switch-claude", "on"], store: store,
+                                   systemdUser: { _ in result }, linuxSystemd: true,
+                                   output: { lines.append($0) })
+            #expect(code == 0)
+            #expect(lines.first == "Saved.")
+            #expect(lines.last?.contains("systemctl --user enable --now ai-control-auto-switch.timer") == true)
+            try store.update { $0.autoSwitch.claude = false }
+        }
+    }
+
+    @Test("Non-Linux settings changes never invoke the timer")
+    func nonLinuxSkipsTimer() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try store.update { $0.autoSwitch.background = true }
+        var called = false
+        let code = runSettings(arguments: ["settings", "set", "auto-switch-claude", "on"], store: store,
+                               systemdUser: { _ in called = true; return 0 }, linuxSystemd: false,
+                               output: { _ in })
+        #expect(code == 0 && !called)
+        #expect(try store.load().backgroundRefreshActive)
+    }
+
+    @Test("Refused and failed saves never invoke the timer")
+    func timerRequiresSuccessfulSave() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var calls = 0
+        func set(_ store: SettingsStore, _ key: String, _ value: String) -> Int32 {
+            runSettings(arguments: ["settings", "set", key, value], store: store,
+                        systemdUser: { _ in calls += 1; return 0 }, linuxSystemd: true,
+                        output: { _ in })
+        }
+        #expect(set(store, "background-refresh", "invalid") == 2)
+        let obstacle = root.appendingPathComponent("obstacle")
+        #expect(FileManager.default.createFile(atPath: obstacle.path, contents: Data()))
+        #expect(set(SettingsStore(directory: obstacle.path + "/data"), "background-refresh", "on") == 3)
+        #expect(calls == 0)
+    }
+
     @Test("Background refresh only applies while automatic switching is on for a provider")
     func backgroundNeedsAutoSwitch() throws {
         var settings = AIControlSettings()

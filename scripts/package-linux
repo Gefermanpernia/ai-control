@@ -51,11 +51,13 @@ swift build -c release --static-swift-stdlib --product AIControl
 engine="$(swift build -c release --show-bin-path)/AIControl"
 stage="dist/.linux-$version-$arch"
 rm -rf "$stage"   # never ship leftovers from an earlier build
-mkdir -p "$stage/usr/lib/ai-control" "$stage/usr/bin" \
+mkdir -p "$stage/usr/lib/ai-control" "$stage/usr/lib/systemd/user" "$stage/usr/bin" \
     "$stage/usr/share/licenses/ai-control" "$stage/usr/share/doc/ai-control" "$stage/DEBIAN"
 install -m 755 "$engine" "$stage/usr/lib/ai-control/AIControl"
 install -m 755 tui/target/release/aic-tui "$stage/usr/lib/ai-control/aic-tui"
 install -m 755 scripts/aic "$stage/usr/lib/ai-control/aic"
+install -m 644 packaging/systemd/ai-control-auto-switch.service "$stage/usr/lib/systemd/user/"
+install -m 644 packaging/systemd/ai-control-auto-switch.timer "$stage/usr/lib/systemd/user/"
 strip "$stage/usr/lib/ai-control/AIControl" "$stage/usr/lib/ai-control/aic-tui"
 ln -sfn ../lib/ai-control/aic "$stage/usr/bin/aic"
 ln -sfn ../lib/ai-control/aic-tui "$stage/usr/bin/aic-tui"
