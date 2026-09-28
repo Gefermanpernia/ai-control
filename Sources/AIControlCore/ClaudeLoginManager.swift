@@ -661,15 +661,26 @@ public func runClaudeLogins(arguments: [String]) -> Int32 {
          ["renew", "add"].contains(arguments[1])) {
         return runAsyncReport(arguments: arguments)
     }
-    if arguments.first == "codex-login" { return runCodexLogins(arguments: arguments, output: { print($0) }) }
     if arguments.first == "settings" { return runSettings(arguments: arguments, output: { print($0) }) }
-    let liveBackend = ClaudeLiveSystem.configuredBackend(environment: ProcessInfo.processInfo.environment)
-    return runClaudeLogins(
-        arguments: arguments,
-        makeBackend: liveBackend ?? { UnavailableClaudeLoginBackend() },
-        output: { print($0) },
-        runGUI: runAIControl
-    )
+    if arguments.first == "auto-switch" { return runAutoSwitch(arguments: arguments, output: { print($0) }) }
+    let status: Int32
+    if arguments.first == "codex-login" {
+        status = runCodexLogins(arguments: arguments, output: { print($0) })
+    } else {
+        let liveBackend = ClaudeLiveSystem.configuredBackend(environment: ProcessInfo.processInfo.environment)
+        status = runClaudeLogins(
+            arguments: arguments,
+            makeBackend: liveBackend ?? { UnavailableClaudeLoginBackend() },
+            output: { print($0) },
+            runGUI: runAIControl
+        )
+    }
+    // A renamed account keeps its place in the automatic-switch order.
+    if status == 0, arguments.count == 4, arguments[1] == "rename" {
+        try? SettingsStore.live.renameInOrder(arguments[0] == "codex-login" ? .codex : .claude,
+                                              from: arguments[2], to: arguments[3])
+    }
+    return status
 }
 
 func runClaudeLogins(

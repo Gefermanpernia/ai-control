@@ -100,6 +100,6 @@ struct SettingsTests {
         let object = try #require(JSONSerialization.jsonObject(with: Data(lines.joined().utf8)) as? [String: Any])
         #expect(object.keys.sorted() == ["autoSwitch", "refresh", "version"])
         let autoSwitch = try #require(object["autoSwitch"] as? [String: Any])
-        #expect(autoSwitch.keys.sorted() == ["background", "claude", "codex", "thresholdPercent"])
+        #expect(autoSwitch.keys.sorted() == ["background", "claude", "claudeOrder", "codex", "codexOrder", "thresholdPercent"])
     }
 }
