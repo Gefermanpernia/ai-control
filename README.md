@@ -31,6 +31,10 @@ files only your user can read, and they are never sent anywhere.
 - **Usage monitors** for OpenCode Go and NaN subscriptions, read-only, when their
   API key is on your computer.
 - **Add and rename accounts** from the menu; signing in opens your browser.
+- **Optional automatic refresh and switching**: reload usage every few minutes,
+  and move to your next account when one reaches its limit. Both are off by
+  default; see [the risk](#automatic-refresh-and-switching) before turning
+  switching on.
 - **Nothing to maintain**: saved logins of accounts you are not using are renewed
   automatically by the official CLIs when needed.
 - **Safe by design**: every switch is checked first and stops before writing
@@ -128,16 +132,18 @@ open the terminal UI:
 | Key | What it does |
 |---|---|
 | ↑ ↓ or `j` `k` | Choose an account |
+| `K` `J` | Move the chosen account up or down in the priority order |
 | `Tab` | Move between Claude and Codex |
 | `Enter` | Switch to the chosen account (asks first) |
 | `a` | Add an account (signing in opens your browser) |
 | `n` | Rename the chosen account |
 | `s` | Save the account you are signed in to now |
+| `o` | Options: [automatic refresh and switching](#automatic-refresh-and-switching) |
 | `r` | Reload usage |
 | `q`, `Esc` or Ctrl+C | Quit |
 
-Usage is loaded when the UI opens and when you press `r`, never in the
-background.
+Usage is loaded when the UI opens and when you press `r`, and every few minutes
+only if you turn on automatic refresh.
 Usage bars are green below 75%, yellow below 90% and red from 90%.
 
 The UI shows Claude Code and Codex only when their CLI is installed or you have
@@ -177,7 +183,9 @@ rm -r ~/Library/Application\ Support/AIControl
 Finally delete **AI Control** from Applications, or the `ai-control` folder if
 you built it from source.
 
-On Linux, remove the package (`sudo apt remove ai-control` or
+On Linux, turn background refresh off first if you turned it on
+(`aic settings set background-refresh off`), so its timer is disabled. Then
+remove the package (`sudo apt remove ai-control` or
 `sudo pacman -R ai-control`), then the saved logins:
 
 ```sh
@@ -215,6 +223,10 @@ the account you picked.
 
 - **Usage** is loaded every time you open the menu, and with the ↻ button.
 - **Rename** an account by right-clicking it and choosing **Rename…**.
+- **Priority**: right-click an account and choose **Move up** or **Move down**.
+  Automatic switching tries accounts in this order.
+- **Options**: ⚙ → **Usage and switching**. See
+  [Automatic refresh and switching](#automatic-refresh-and-switching).
 
 macOS may ask for permission the first time AI Control uses the Keychain; choose
 **Always Allow**.
@@ -237,6 +249,11 @@ Everything in the menu is also available from the terminal:
 | `aic renew <name>` / `aic codex renew <name>` | Renew a saved account's login now |
 | `aic recover` | Finish or undo an interrupted Claude switch |
 | `aic status --json [--usage]` | Saved accounts, and optionally their usage, as JSON for scripts |
+| `aic settings` | Show the refresh and automatic switching options |
+| `aic settings set <option> <value>` | Change one of them (see below) |
+| `aic auto-switch order claude\|codex` | Show the priority order |
+| `aic auto-switch move claude\|codex <name> up\|down` | Move an account in the priority order |
+| `aic auto-switch check` | Switch now if the account in use reached its limit |
 
 Names use lowercase letters, digits, `-` and `_`, starting with a letter.
 
@@ -246,7 +263,7 @@ AI Control also shows usage for subscriptions you reach with an API key. Monitor
 are read-only: there is no switching, AI Control stores no key, and a key is only
 sent to its own provider. A monitor appears in the menu and the terminal UI only
 when its key is found, and its usage loads with the accounts' usage: when you open
-the menu or the terminal UI, and when you reload.
+the menu or the terminal UI, when you reload, and on each automatic refresh.
 
 | Subscription | Key read from | Shows |
 |---|---|---|
@@ -263,6 +280,55 @@ launchctl setenv NAN_API_KEY "$NAN_API_KEY"
 
 This lasts until you restart your Mac. Starting AI Control with `aic` from a
 terminal where `NAN_API_KEY` is set also works.
+
+## Automatic refresh and switching
+
+> **Risk.** Providers may treat rotating accounts to get around usage limits as
+> abuse, and may suspend the accounts involved. Automatic switching is off by
+> default; turn it on only if you accept that risk, and use it according to each
+> provider's terms.
+
+Both features are off by default. Change them in the menu (⚙ → **Usage and
+switching**), in the terminal UI (`o`), or with `aic settings set`. All three
+change the same options.
+
+| Option | `aic settings set …` | Default |
+|---|---|---|
+| Refresh usage periodically | `refresh on\|off` | off |
+| Refresh interval | `refresh-interval <seconds>` (300 or more) | 300 |
+| Switch Claude automatically | `auto-switch-claude on\|off` | off |
+| Switch Codex automatically | `auto-switch-codex on\|off` | off |
+| Switch at | `auto-switch-threshold <percent>` (50–100) | 99 |
+| Refresh in the background | `background-refresh on\|off` | off |
+
+**Automatic refresh** reloads usage every interval while the menu or the
+terminal UI is open, never while a switch, a rename or a sign-in is running.
+Reloading does not renew saved logins each time: a saved login is renewed only
+when its access is about to expire.
+
+**Automatic switching** acts after usage loads. When the account in use has
+reached the threshold on **any** limit (5-hour or weekly), AI Control switches
+to the first account in your priority order that does not need a new sign-in and
+is below the threshold on every limit. A spent weekly limit rules an account out
+even with 5-hour room left. If no account qualifies, or the usage of the account
+in use is unknown, nothing changes. It uses the same checked switch as a click,
+so it stops rather than write anything uncertain, and it never switches back and
+forth.
+
+**Background refresh** lets switching work with nothing open. It only runs while
+automatic switching is on for a provider:
+
+- **macOS:** the menu-bar app keeps checking with the menu closed, at the
+  refresh interval (at least 5 minutes).
+- **Linux:** a systemd user timer runs `aic auto-switch check --background`
+  every 5 minutes while you are logged in. Installing the package never turns it
+  on; turning on background refresh enables it, and turning it off disables it.
+- **WSL, or Linux without systemd:** the option is saved but the timer cannot be
+  started. Enable it yourself where systemd is available:
+
+  ```sh
+  systemctl --user enable --now ai-control-auto-switch.timer
+  ```
 
 ## Two rules that keep saved logins valid
 
