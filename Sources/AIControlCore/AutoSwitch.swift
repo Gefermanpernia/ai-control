@@ -90,8 +90,13 @@ struct AutoSwitchProvider: Sendable {
 }
 
 /// Checks every provider once and switches the ones with automatic switching on; one line per provider.
-func runAutoSwitchCheck(providers: [AutoSwitchProvider], settings: AIControlSettings,
+/// A background check (a timer with no interface open) runs only while background refresh is on too.
+func runAutoSwitchCheck(providers: [AutoSwitchProvider], settings: AIControlSettings, background: Bool = false,
                         output: (String) -> Void) async -> Int32 {
+    if background, !settings.backgroundRefreshActive {
+        output("Background checks are off.")
+        return 0
+    }
     var status: Int32 = 0
     let threshold = settings.autoSwitch.thresholdPercent
     for provider in providers {
@@ -126,20 +131,21 @@ func runAutoSwitchCheck(providers: [AutoSwitchProvider], settings: AIControlSett
     return status
 }
 
-/// `auto-switch check`, `auto-switch order claude|codex`, `auto-switch move claude|codex <alias> up|down`.
+/// `auto-switch check [--background]`, `auto-switch order claude|codex`,
+/// `auto-switch move claude|codex <alias> up|down`.
 func runAutoSwitch(arguments: [String], claude: ClaudeLoginAppAdapter = .configured(),
                    codex: CodexLoginAppAdapter = .configured(), store: SettingsStore = .live,
                    output: @escaping @Sendable (String) -> Void) -> Int32 {
-    let usage = "Usage: AIControl auto-switch check | order claude|codex | move claude|codex <alias> up|down"
+    let usage = "Usage: AIControl auto-switch check [--background] | order claude|codex | move claude|codex <alias> up|down"
     let providers = ["claude": AutoSwitchProvider.claude(claude), "codex": .codex(codex)]
     let result = ResultBox()
     let done = DispatchSemaphore(value: 0)
     Task {
         defer { done.signal() }
         guard let settings = try? store.load() else { output("Blocked: settings could not be read."); result.value = 3; return }
-        if arguments == ["auto-switch", "check"] {
+        if arguments == ["auto-switch", "check"] || arguments == ["auto-switch", "check", "--background"] {
             result.value = await runAutoSwitchCheck(providers: [providers["claude"]!, providers["codex"]!],
-                                                    settings: settings, output: output)
+                                                    settings: settings, background: arguments.count == 3, output: output)
             return
         }
         guard arguments.count >= 3, arguments[0] == "auto-switch", let provider = providers[arguments[2]] else {

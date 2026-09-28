@@ -141,6 +141,19 @@ struct AutoSwitchTests {
         #expect(log.lines == ["Claude: not switched to home. Blocked: another change is in progress."])
     }
 
+    @Test("A background check does nothing unless background refresh and switching are both on")
+    func backgroundCheckNeedsBothOptions() async {
+        let log = Log()
+        var settings = settings(claude: true)
+        let providers = [provider(log, current: "work", usage: ["work": usage(99, 1), "home": usage(1, 1)])]
+        #expect(await runAutoSwitchCheck(providers: providers, settings: settings, background: true) { log.lines.append($0) } == 0)
+        #expect(log.fetched == 0 && log.used.isEmpty)
+        #expect(log.lines == ["Background checks are off."])
+        settings.autoSwitch.background = true
+        #expect(await runAutoSwitchCheck(providers: providers, settings: settings, background: true) { log.lines.append($0) } == 0)
+        #expect(log.used == ["home"])
+    }
+
     // MARK: - Stored order
 
     @Test("The order is stored in the settings, keeps only valid names, and follows a rename")
