@@ -374,6 +374,63 @@ struct ControlStoreTests {
         #expect(counter.count == afterOpen + 2)
     }
 
+    @Test("With refresh on, an open window reloads usage every interval; closed or off, it never does")
+    func periodicRefreshWhileOpen() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let counter = FetchCounter()
+        let body = Data(#"{"five_hour":{"utilization":1.0,"resets_at":null}}"#.utf8)
+        var settings = AIControlSettings()
+        settings.refresh.enabled = true
+        settings.refresh.intervalSeconds = 600
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 }, fetch: { _ in counter.count += 1; return body }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter(), settings: { settings })
+        let opened = Date()
+
+        store.windowOpened(now: opened)
+        while store.isLoadingClaudeUsage || store.claudeActivity != .idle { await Task.yield() }
+        let afterOpen = counter.count
+        #expect(!store.refreshDue(now: opened.addingTimeInterval(599)))
+        #expect(store.tick(now: opened.addingTimeInterval(599)) == false)
+        #expect(store.refreshDue(now: opened.addingTimeInterval(600)))
+        #expect(store.tick(now: opened.addingTimeInterval(600)))
+        #expect(!store.refreshDue(now: opened.addingTimeInterval(601)), "a load is in progress")
+        while store.isLoadingClaudeUsage { await Task.yield() }
+        #expect(counter.count == afterOpen * 2)
+
+        store.windowClosed()
+        #expect(!store.refreshDue(now: opened.addingTimeInterval(5000)))
+        settings.refresh.enabled = false
+        store.windowOpened(now: opened.addingTimeInterval(5000))
+        while store.isLoadingClaudeUsage || store.claudeActivity != .idle { await Task.yield() }
+        #expect(!store.refreshDue(now: opened.addingTimeInterval(9000)))
+    }
+
+    @Test("Periodic refresh waits while a switch runs and never goes below 300 seconds")
+    func periodicRefreshWaitsForActions() async throws {
+        let backend = try SavedLoginBackend(betaUsable: true)
+        var settings = AIControlSettings()
+        settings.refresh.enabled = true
+        let store = ControlStore(claudeLogins: ClaudeLoginAppAdapter(makeBackend: { backend }, services: .init(
+            liveSnapshot: { throw CancellationError() }, renew: { $0 }, fetch: { _ in throw CancellationError() }, signIn: { _ in }
+        )), codexLogins: CodexLoginAppAdapter(), settings: { settings })
+        let opened = Date()
+        store.windowOpened(now: opened)
+        while store.isLoadingClaudeUsage || store.claudeActivity != .idle { await Task.yield() }
+        #expect(!store.refreshDue(now: opened.addingTimeInterval(299)))
+        let switching = try #require(store.selectClaudeLogin("beta"))
+        #expect(!store.refreshDue(now: opened.addingTimeInterval(1000)), "a switch is running")
+        await switching.value
+        #expect(store.refreshDue(now: opened.addingTimeInterval(1000)))
+    }
+
+    @Test("The screenshot demo never refreshes on a timer")
+    func demoNeverTicks() {
+        let store = ControlStore.demo()
+        store.windowOpened()
+        #expect(!store.refreshDue(now: Date().addingTimeInterval(100_000)))
+    }
+
     @Test("Renaming and adding report their outcome and reload the list")
     func renameAndAddReportOutcome() async throws {
         let backend = try SavedLoginBackend(betaUsable: true)
