@@ -88,23 +88,24 @@ fn login_line(
     }
     Line::from(spans)
 }
+/// Rounds before choosing the unit, so 999,950 reads 1M rather than 1000K; one decimal only below 10.
 fn compact_tokens(tokens: i64) -> String {
-    let magnitude = tokens.unsigned_abs();
-    let (divisor, suffix) = if magnitude >= 1_000_000_000 {
-        (1_000_000_000, "B")
-    } else if magnitude >= 1_000_000 {
-        (1_000_000, "M")
-    } else if magnitude >= 1_000 {
-        (1_000, "K")
-    } else {
+    if tokens < 1_000 {
         return tokens.to_string();
-    };
-    let scaled = tokens as f64 / divisor as f64;
-    if (scaled * 10.0).round() % 10.0 == 0.0 {
-        format!("{scaled:.0}{suffix}")
-    } else {
-        format!("{scaled:.1}{suffix}")
     }
+    for (divisor, unit) in [(1e3, "K"), (1e6, "M"), (1e9, "B")] {
+        let value = tokens as f64 / divisor;
+        let scale = if value < 10.0 { 10.0 } else { 1.0 };
+        let rounded = (value * scale).round() / scale;
+        if rounded < 1_000.0 || unit == "B" {
+            return if rounded.fract() == 0.0 {
+                format!("{rounded:.0}{unit}")
+            } else {
+                format!("{rounded:.1}{unit}")
+            };
+        }
+    }
+    tokens.to_string()
 }
 fn monitor_rows(monitors: &[Monitor], now: OffsetDateTime) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -406,6 +407,17 @@ fn key_hints(width: usize, updated: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compact_tokens_rounds_before_choosing_the_unit() {
+        assert_eq!(compact_tokens(999), "999");
+        assert_eq!(compact_tokens(1_000), "1K");
+        assert_eq!(compact_tokens(12_345), "12K");
+        assert_eq!(compact_tokens(950_000), "950K");
+        assert_eq!(compact_tokens(999_950), "1M");
+        assert_eq!(compact_tokens(1_200_000_000), "1.2B");
+        assert_eq!(compact_tokens(9_950_000_000), "10B");
+    }
+
     use super::*;
     use crate::{app::Loading, status::parse};
     use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};

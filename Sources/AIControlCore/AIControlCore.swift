@@ -841,10 +841,16 @@ extension SavedLoginRow {
 }
 
 struct TokenCountFormatter {
+    /// Rounds before choosing the unit, so 999,950 reads 1M rather than 1000K; one decimal only below 10.
     static func compact(_ tokens: Int) -> String {
-        for (threshold, unit) in [(1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")] where tokens >= threshold {
-            let value = Double(tokens) / Double(threshold)
-            return String(format: value < 10 && value.rounded() != value ? "%.1f%@" : "%.0f%@", value, unit)
+        guard tokens >= 1_000 else { return String(tokens) }
+        for (divisor, unit) in [(1_000.0, "K"), (1_000_000.0, "M"), (1_000_000_000.0, "B")] {
+            let value = Double(tokens) / divisor
+            let scale = value < 10 ? 10.0 : 1.0
+            let rounded = (value * scale).rounded() / scale
+            if rounded < 1_000 || unit == "B" {
+                return (rounded.rounded() == rounded ? String(Int(rounded)) : String(format: "%.1f", rounded)) + unit
+            }
         }
         return String(tokens)
     }

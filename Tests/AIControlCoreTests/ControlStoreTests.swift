@@ -327,6 +327,11 @@ struct ControlStoreTests {
         #expect(TokenCountFormatter.compact(1_200_000_000) == "1.2B")
         #expect(TokenCountFormatter.compact(3_000_000_000) == "3B")
         #expect(TokenCountFormatter.compact(999) == "999")
+        // Rounding decides the unit: values just under a boundary move up instead of showing "1000K" or "10.0B".
+        #expect(TokenCountFormatter.compact(999_950) == "1M")
+        #expect(TokenCountFormatter.compact(9_950_000_000) == "10B")
+        #expect(TokenCountFormatter.compact(1_000) == "1K")
+        #expect(TokenCountFormatter.compact(12_345) == "12K")
     }
 
     @Test("Usage loads after the list, per saved login")
