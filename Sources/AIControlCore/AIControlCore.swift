@@ -159,16 +159,15 @@ final class ControlStore: ObservableObject {
         guard !isDemo, settingsStore != nil, activity == .idle, let index = names.firstIndex(of: alias) else { return false }
         return names.indices.contains(up ? index - 1 : index + 1)
     }
+    /// Moves an account in the priority order using the accounts on screen; it never waits on a login adapter.
     @discardableResult
     func moveLogin(_ provider: AIControlSettings.Provider, alias: String, up: Bool) -> Bool {
         guard canMoveLogin(provider, alias: alias, up: up), let settingsStore else { return false }
-        let output = MenuCommandLines()
-        let name = provider == .claude ? "claude" : "codex"
-        let status = runAutoSwitch(arguments: ["auto-switch", "move", name, alias, up ? "up" : "down"],
-                                   claude: claudeAdapter, codex: codexAdapter, store: settingsStore,
-                                   output: { output.append($0) })
-        if status != 0 {
-            let notice = ClaudeLoginNotice(text: output.last ?? "Priority could not be changed.", offersRecovery: false)
+        let names = provider == .claude ? orderedClaudeLogins.map(\.name) : orderedCodexLogins.map(\.name)
+        do {
+            guard try movePriority(provider, alias: alias, up: up, in: names, store: settingsStore) != nil else { return false }
+        } catch {
+            let notice = ClaudeLoginNotice(text: "Blocked: settings could not be saved.", offersRecovery: false)
             if provider == .claude { claudeNotice = notice } else { codexNotice = notice }
             return false
         }
@@ -503,13 +502,6 @@ final class ControlStore: ObservableObject {
 ///
 /// This is the only symbol the executable target needs, so every other type in
 /// this module stays internal and is reached from tests via `@testable import`.
-private final class MenuCommandLines: @unchecked Sendable {
-    private let lock = NSLock()
-    private var lines: [String] = []
-    func append(_ line: String) { lock.withLock { lines.append(line) } }
-    var last: String? { lock.withLock { lines.last } }
-}
-
 @MainActor
 public func runAIControl() {
     AIControlApp.main()

@@ -6,7 +6,7 @@ import Testing
 
 private final class SavedLoginBackend: ClaudeLoginBackend {
     private var state: ClaudeLoginState
-    private let loadFails: Bool
+    var loadFails: Bool
     private let selectionError: Error?
     private(set) var selectCalls = 0
 
@@ -661,6 +661,38 @@ struct ControlStoreTests {
         #expect(try fixture.store.load() == saved)
     }
 
+    @Test("Moving an account uses the accounts on screen and never waits on the login adapters")
+    func menuPriorityMoveSkipsAdapters() async throws {
+        let fixture = try MenuSettingsFixture()
+        defer { fixture.cleanup() }
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let store = makeStore(claudeBackend: backend, settingsStore: fixture.store)
+        try await #require(store.reloadClaudeLogins()).value
+        // A busy or failing adapter must not matter: the move only rewrites the order in the settings.
+        backend.loadFails = true
+        #expect(store.moveLogin(.claude, alias: "beta", up: true))
+        #expect(store.orderedClaudeLogins.map(\.name) == ["beta", "alpha"])
+        #expect(try fixture.store.load().order(.claude) == ["beta", "alpha"])
+    }
+
+    @Test("aic auto-switch move keeps its output lines: the new order, or why nothing moved")
+    func autoSwitchMoveCommandOutput() throws {
+        let fixture = try MenuSettingsFixture()
+        defer { fixture.cleanup() }
+        let backend = try SavedLoginBackend(betaUsable: true)
+        let lines = MoveLines()
+        func run(_ arguments: [String]) -> Int32 {
+            lines.clear()
+            return runAutoSwitch(arguments: arguments, claude: ClaudeLoginAppAdapter(makeBackend: { backend }),
+                                 codex: CodexLoginAppAdapter(), store: fixture.store, output: { lines.append($0) })
+        }
+        #expect(run(["auto-switch", "move", "claude", "beta", "up"]) == 0)
+        #expect(lines.all == ["beta", "alpha"])
+        #expect(run(["auto-switch", "move", "claude", "ghost", "down"]) == 3)
+        #expect(lines.all == ["ghost is not a saved Claude account."])
+        #expect(try fixture.store.load().order(.claude) == ["beta", "alpha"])
+    }
+
     @Test("Demo controls cannot write even with an injected settings store")
     func demoMenuIsReadOnly() throws {
         let fixture = try MenuSettingsFixture()
@@ -805,3 +837,11 @@ private final class FetchCounter: @unchecked Sendable {
     var count = 0
 }
 #endif
+
+private final class MoveLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func append(_ line: String) { lock.withLock { lines.append(line) } }
+    func clear() { lock.withLock { lines.removeAll() } }
+    var all: [String] { lock.withLock { lines } }
+}
