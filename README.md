@@ -28,6 +28,8 @@ files only your user can read, and they are never sent anywhere.
 - **Open sessions keep working** after a switch.
 - **Usage at a glance**: 5-hour and weekly limits for every account, with reset
   times, plus the rate-limit resets Codex has left.
+- **Usage monitors** for OpenCode Go and NaN subscriptions, read-only, when their
+  API key is on your computer.
 - **Add and rename accounts** from the menu; signing in opens your browser.
 - **Nothing to maintain**: saved logins of accounts you are not using are renewed
   automatically by the official CLIs when needed.
@@ -238,6 +240,30 @@ Everything in the menu is also available from the terminal:
 
 Names use lowercase letters, digits, `-` and `_`, starting with a letter.
 
+## Usage monitors
+
+AI Control also shows usage for subscriptions you reach with an API key. Monitors
+are read-only: there is no switching, AI Control stores no key, and a key is only
+sent to its own provider. A monitor appears in the menu and the terminal UI only
+when its key is found, and its usage loads with the accounts' usage: when you open
+the menu or the terminal UI, and when you reload.
+
+| Subscription | Key read from | Shows |
+|---|---|---|
+| OpenCode Go | OpenCode's own `auth.json` (`~/.local/share/opencode/auth.json`, or `$XDG_DATA_HOME/opencode/auth.json`), saved by `/connect` in OpenCode | 5-hour, weekly and monthly limits |
+| NaN | The `NAN_API_KEY` environment variable | Tokens used this month per model, and a percentage for models whose monthly quota NaN publishes |
+
+A menu-bar app opened from Finder or at login does not see variables exported in
+your shell. To show NaN there, make the key visible to apps, then quit and reopen
+AI Control:
+
+```sh
+launchctl setenv NAN_API_KEY "$NAN_API_KEY"
+```
+
+This lasts until you restart your Mac. Starting AI Control with `aic` from a
+terminal where `NAN_API_KEY` is set also works.
+
 ## Two rules that keep saved logins valid
 
 1. **Never log out** with `/logout`, `claude auth logout` or `codex logout`.
@@ -289,6 +315,11 @@ change — stops the switch before it writes anything.
 - When a Claude Code update changes how logins are stored, switching stops until
   the new build is reviewed.
 - Codex logins stored in the Keychain instead of `auth.json` are not supported.
+- OpenCode Go's usage endpoint is not documented by OpenCode; if it changes, its
+  monitor shows an error until AI Control is updated.
+- NaN's `glm5.3` follows each member's billing period, which NaN's API does not
+  report, so it shows tokens used without a percentage.
+- Command Code has no public usage API, so it has no monitor.
 
 ## Development
 
