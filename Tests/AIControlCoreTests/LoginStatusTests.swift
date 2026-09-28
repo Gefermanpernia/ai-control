@@ -99,7 +99,8 @@ struct LoginStatusTests {
                                         claudeFetch: { _ in Issue.record("unexpected Claude fetch"); throw StatusFailure() },
                                         codexFetch: { _ in Issue.record("unexpected Codex fetch"); throw StatusFailure() })
         let root = try document(await loginStatus(claude: claude, codex: codex, includeUsage: false, monitors: noMonitors))
-        #expect(root.keys.sorted() == ["claude", "codex", "monitors", "version"])
+        #expect(root.keys.sorted() == ["claude", "codex", "monitors", "settings", "version"])
+        #expect((root["settings"] as? [String: Any])?["refresh"] != nil)
         #expect((root["monitors"] as? [Any])?.isEmpty == true)
         #expect(root["version"] as? Int == 1)
         let c = try #require(root["claude"] as? [String: Any])

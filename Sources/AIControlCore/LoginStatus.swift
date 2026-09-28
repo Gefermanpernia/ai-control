@@ -148,12 +148,14 @@ struct LoginStatus: Codable {
     let claude: Claude
     let codex: Codex
     let monitors: [Monitor]
+    let settings: AIControlSettings
 
-    init(claude: Claude, codex: Codex, monitors: [Monitor]) {
+    init(claude: Claude, codex: Codex, monitors: [Monitor], settings: AIControlSettings = .init()) {
         version = 1
         self.claude = claude
         self.codex = codex
         self.monitors = monitors
+        self.settings = settings
     }
 }
 
@@ -172,7 +174,7 @@ struct InstalledCLIs {
 
 func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, includeUsage: Bool,
                  installed: InstalledCLIs = .init(claude: true, codex: true),
-                 monitors: UsageMonitors = .live) async -> LoginStatus {
+                 monitors: UsageMonitors = .live, settings: AIControlSettings = .init()) async -> LoginStatus {
     let claudeList = await claude.list()
     let codexList = await codex.list()
     let claudeUsage = includeUsage ? await claude.usage() : [:]
@@ -197,7 +199,8 @@ func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, inc
     } else {
         codexState = .init(available: false, inUse: nil, logins: [], installed: installed.codex)
     }
-    return .init(claude: claudeState, codex: codexState, monitors: await monitors.monitors(includeUsage: includeUsage))
+    return .init(claude: claudeState, codex: codexState, monitors: await monitors.monitors(includeUsage: includeUsage),
+                 settings: settings)
 }
 
 private func statusUsage(_ result: LoginUsageResult?) -> (LoginStatus.Usage?, String?) {
