@@ -40,9 +40,31 @@ enum ClaudeStorageContract {
 
     /// The digest of the single derivation in an executable, or nil when it is missing or repeated.
     static func digest(in data: Data) -> String? {
-        guard let first = data.range(of: anchor),
-              data.range(of: anchor, in: first.upperBound..<data.endIndex) == nil else { return nil }
-        return digest(of: String(decoding: data[first.lowerBound..<min(first.lowerBound + 4096, data.endIndex)], as: UTF8.self))
+        guard let first = offset(of: anchor, in: data, from: 0),
+              offset(of: anchor, in: data, from: first + anchor.count) == nil else { return nil }
+        let start = data.startIndex + first
+        return digest(of: String(decoding: data[start..<min(start + 4096, data.endIndex)], as: UTF8.self))
+    }
+
+    /// Byte offset of `needle` in `data` at or after `offset`, searching the whole remainder. Uses `memchr` and
+    /// `memcmp` because `Data.range(of:)` in Foundation on Linux scans a 230 MB Claude binary several times
+    /// slower; `memmem` would also work but is a GNU extension that Swift does not import on every Linux.
+    private static func offset(of needle: Data, in data: Data, from offset: Int) -> Int? {
+        data.withUnsafeBytes { (haystack: UnsafeRawBufferPointer) -> Int? in
+            guard let base = haystack.baseAddress, let first = needle.first, offset >= 0 else { return nil }
+            return needle.withUnsafeBytes { (pattern: UnsafeRawBufferPointer) -> Int? in
+                guard let bytes = pattern.baseAddress else { return nil }
+                let last = haystack.count - pattern.count
+                var position = offset
+                while position <= last {
+                    guard let hit = memchr(base + position, Int32(first), last - position + 1) else { return nil }
+                    let index = base.distance(to: UnsafeRawPointer(hit))
+                    if memcmp(base + index, bytes, pattern.count) == 0 { return index }
+                    position = index + 1
+                }
+                return nil
+            }
+        }
     }
 
     static func digest(of source: String) -> String? {
