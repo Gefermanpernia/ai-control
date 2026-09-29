@@ -2868,6 +2868,18 @@ struct ClaudeLoginManagerTests {
         #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed), digest: String(repeating: "0", count: 64)))
     }
 
+    @Test("Storage contract scans the whole binary: a late derivation is found, a far second copy is refused")
+    func storageContractScansWholeBinary() throws {
+        let reviewed = SyntheticDerivation.source(names: ["q", "k", "a", "w", "z", "b", "m"])
+        let digest = try #require(ClaudeStorageContract.digest(of: reviewed))
+        let padding = Data(repeating: 0x20, count: 8 << 20)
+        let late = padding + SyntheticDerivation.binary(reviewed)
+        #expect(ClaudeStorageContract.matches(late, digest: digest))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed) + padding + Data(reviewed.utf8), digest: digest))
+        #expect(!ClaudeStorageContract.matches(padding + Data(#""-credentials";function"#.utf8), digest: digest),
+                "a truncated anchor at the very end is not a match")
+    }
+
     @Test(
         "Opt-in: installed Claude Code builds satisfy the storage contract",
         .enabled(if: ProcessInfo.processInfo.environment["AI_CONTROL_CLAUDE_BINARIES"] != nil)
