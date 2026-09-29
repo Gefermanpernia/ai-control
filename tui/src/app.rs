@@ -251,9 +251,9 @@ impl App {
                     "on".into(),
                 ]);
                 self.mode = Mode::ConfirmRisk;
-                self.message = "Providers may treat rotating accounts to get around usage limits as abuse and \
-                                suspend them. Turn automatic switching on? y/n"
-                    .into();
+                self.message =
+                    "Providers may suspend accounts rotated to get around usage limits. Turn switching on? y/n"
+                        .into();
                 self.action_success = None;
                 Effect::None
             }
