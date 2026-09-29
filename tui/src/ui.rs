@@ -422,8 +422,8 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
         Mode::Save => format!("Save current login as: {}", app.input),
         Mode::AddAlias => format!("Alias: {}", app.input),
         Mode::AddEmail => format!("Claude email (optional): {}", app.input),
-        Mode::Options if app.loading.is_none() && !app.message.is_empty() => app.message.clone(),
-        Mode::Options => "↑↓ choose · Enter change · Esc back".into(),
+        Mode::Options if app.loading.is_none() => app.message.clone(),
+        Mode::Options => String::new(),
         Mode::OptionInput => {
             let question = if app.option == 1 {
                 "Refresh interval in minutes (5 or more)"
@@ -474,7 +474,13 @@ fn footer(frame: &mut Frame, area: Rect, app: &App, now: OffsetDateTime) {
     };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(key_hints(usize::from(area.width), &updated)),
+            Line::from(match app.mode {
+                // The option screens use their own keys; the account keys do nothing there.
+                Mode::Options => format!("↑↓ choose · Enter change · Esc back · {updated}"),
+                Mode::OptionInput => format!("Type a number · Enter save · Esc back · {updated}"),
+                Mode::ConfirmRisk => format!("y turn on · any other key cancels · {updated}"),
+                _ => key_hints(usize::from(area.width), &updated),
+            }),
             Line::from(Span::styled(prompt, style)),
         ]),
         area,
@@ -826,6 +832,53 @@ mod tests {
         assert!(
             line.contains("minutes (5 or more): 3 · Not saved"),
             "{line}"
+        );
+    }
+    #[test]
+    fn option_screens_show_only_their_own_keys() {
+        let s = r#"{"version":1,"claude":{"available":true,"installed":true,"logins":[]},"codex":{"available":true,"installed":true,"logins":[]}}"#;
+        let mut app = App::new(parse(s).unwrap());
+        let footer = |app: &App| {
+            let buffer = rendered(app, 100, 12, OffsetDateTime::UNIX_EPOCH);
+            [
+                row(&buffer, buffer.area.height - 2),
+                row(&buffer, buffer.area.height - 1),
+            ]
+        };
+        app.key(crate::app::Key::Char('o'));
+        let [hints, prompt] = footer(&app);
+        assert!(
+            hints.starts_with("↑↓ choose · Enter change · Esc back · updated"),
+            "{hints}"
+        );
+        assert!(
+            !hints.contains("rename") && !hints.contains("Tab"),
+            "{hints}"
+        );
+        assert!(prompt.trim().is_empty(), "{prompt}");
+        app.key(crate::app::Key::Down);
+        app.key(crate::app::Key::Enter);
+        let [hints, _] = footer(&app);
+        assert!(
+            hints.starts_with("Type a number · Enter save · Esc back"),
+            "{hints}"
+        );
+        for _ in 0..2 {
+            app.key(crate::app::Key::Esc);
+        }
+        app.key(crate::app::Key::Char('o'));
+        for _ in 0..2 {
+            app.key(crate::app::Key::Down);
+        }
+        app.key(crate::app::Key::Enter);
+        let [hints, prompt] = footer(&app);
+        assert!(
+            hints.starts_with("y turn on · any other key cancels"),
+            "{hints}"
+        );
+        assert!(
+            prompt.contains("suspend") && prompt.contains("y/n"),
+            "{prompt}"
         );
     }
     #[test]
