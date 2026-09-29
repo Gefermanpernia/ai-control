@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/Gefermanpernia/ai-control/compare/v0.5.0...v0.5.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **linux:** check the Claude storage contract without the slow Data search ([#95](https://github.com/Gefermanpernia/ai-control/issues/95)) ([896fcf9](https://github.com/Gefermanpernia/ai-control/commit/896fcf99361036a00c948e7f1f71789e26f7d8e4)), closes [#94](https://github.com/Gefermanpernia/ai-control/issues/94)
+* **tui:** show each options screen's own keys in the footer ([#90](https://github.com/Gefermanpernia/ai-control/issues/90)) ([46d84ac](https://github.com/Gefermanpernia/ai-control/commit/46d84ac5e6892b92a6541fcce7363d5afa962732)), closes [#89](https://github.com/Gefermanpernia/ai-control/issues/89)
+
 ## [0.5.0](https://github.com/Gefermanpernia/ai-control/compare/v0.4.0...v0.5.0) (2026-09-28)
 
 
