@@ -129,6 +129,10 @@ makepkg -si
 Both install `aic` and `aic-tui`; Swift and Rust are not needed. Run `aic` to
 open the terminal UI:
 
+<p align="center">
+  <img src="docs/images/tui-accounts.png" alt="The terminal UI listing saved Claude Code and Codex accounts and usage monitors with usage bars" width="720">
+</p>
+
 | Key | What it does |
 |---|---|
 | ↑ ↓ or `j` `k` | Choose an account |
@@ -145,6 +149,13 @@ open the terminal UI:
 Usage is loaded when the UI opens and when you press `r`, and every few minutes
 only if you turn on automatic refresh.
 Usage bars are green below 75%, yellow below 90% and red from 90%.
+
+Press `o` for the options; every change is saved by the engine, so the terminal
+UI, the macOS menu and `aic settings` stay in sync:
+
+<p align="center">
+  <img src="docs/images/tui-options.png" alt="The terminal UI options screen with refresh and automatic switching settings" width="720">
+</p>
 
 The UI shows Claude Code and Codex only when their CLI is installed or you have
 saved accounts for them.
