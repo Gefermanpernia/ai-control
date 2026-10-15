@@ -132,6 +132,9 @@ protocol ClaudeLoginBackend {
     func saveState(_ state: ClaudeLoginState) throws
     func selectAlias(_ alias: String) throws
     func recoverPendingLogin() throws
+    /// For `.use`, every failure after Claude's live login is first written is thrown as
+    /// `ClaudeLoginEnvelopeError.recoveryRequired` or `ClaudeLoginSelectionError.cleanupUncertain`; any other
+    /// error means the live login was not written.
     func perform(command: ClaudeLoginBackendCommand, operation: (any ClaudeLoginBackend) throws -> Int32) throws -> Int32
 }
 
@@ -446,6 +449,8 @@ enum ClaudeLoginAppResult: Equatable, Sendable {
     case recoveryRequired
     case backendUnavailable
     case postCommitCleanupUncertain
+    /// The switch stopped before Claude's live login was written; carries the cause by type and case only.
+    case notApplied(String)
     case unverifiedFailure
 }
 
@@ -509,7 +514,23 @@ actor ClaudeLoginAppAdapter {
         do {
             _ = try backend.perform(command: .use) { try $0.selectAlias(alias); return 0 }
             return .verifiedApplied(alias)
-        } catch { return failure(error, alias: alias) }
+        } catch {
+            let result = failure(error, alias: alias)
+            guard result == .unverifiedFailure else { return result }
+            // `.use` reports every failure after Claude's live login is first written as recovery-required or
+            // cleanup-uncertain, so this one came before any write. A failed preparation can still leave a
+            // pending switch behind, which the next list reports.
+            if list() == .recoveryRequired { return .recoveryRequired }
+            return .notApplied(Self.causeName(error))
+        }
+    }
+
+    /// Names an error by type and case only; associated values are left out so no content can reach a notice.
+    static func causeName(_ error: Error) -> String {
+        let type = String(describing: Swift.type(of: error))
+        let mirror = Mirror(reflecting: error)
+        guard mirror.displayStyle == .enum else { return type }
+        return "\(type).\(mirror.children.first?.label ?? String(describing: error))"
     }
 
     /// Usage per saved alias. The live account uses the live login; others use their saved login, and an
