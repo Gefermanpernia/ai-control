@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/Gefermanpernia/ai-control/compare/v0.5.1...v0.5.2) (2026-10-15)
+
+
+### Bug Fixes
+
+* **app:** say a failed Claude switch changed nothing when no write happened ([#97](https://github.com/Gefermanpernia/ai-control/issues/97)) ([4c38e8c](https://github.com/Gefermanpernia/ai-control/commit/4c38e8c30d2154f29bd8529e8fa48080cd349bf4)), closes [#96](https://github.com/Gefermanpernia/ai-control/issues/96)
+* **claude-login:** accept the Claude Code 2.1.301 storage contract ([#100](https://github.com/Gefermanpernia/ai-control/issues/100)) ([c40ed1b](https://github.com/Gefermanpernia/ai-control/commit/c40ed1bc98534fb27813b345e2b37672451eb129)), closes [#99](https://github.com/Gefermanpernia/ai-control/issues/99)
+
 ## [0.5.1](https://github.com/Gefermanpernia/ai-control/compare/v0.5.0...v0.5.1) (2026-09-29)
 
 
