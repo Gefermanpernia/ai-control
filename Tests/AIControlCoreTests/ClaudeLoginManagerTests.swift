@@ -2883,12 +2883,28 @@ struct ClaudeLoginManagerTests {
         let digest = try #require(ClaudeStorageContract.digest(of: reviewed))
         let renamed = SyntheticDerivation.binary(SyntheticDerivation.source(names: ["Xy", "Ab1", "c", "Zz9", "Qr", "d", "e"]))
 
-        #expect(ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed), digest: digest))
-        #expect(ClaudeStorageContract.matches(renamed, digest: digest))
-        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed.replacingOccurrences(of: "USER", with: "LOGNAME")), digest: digest))
-        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed + reviewed), digest: digest))
-        #expect(!ClaudeStorageContract.matches(Data(repeating: 0x20, count: 256), digest: digest))
-        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed), digest: String(repeating: "0", count: 64)))
+        #expect(ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed), digests: [digest]))
+        #expect(ClaudeStorageContract.matches(renamed, digests: [digest]))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed.replacingOccurrences(of: "USER", with: "LOGNAME")), digests: [digest]))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed + reviewed), digests: [digest]))
+        #expect(!ClaudeStorageContract.matches(Data(repeating: 0x20, count: 256), digests: [digest]))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed), digests: [String(repeating: "0", count: 64)]))
+    }
+
+    @Test("Storage contract accepts each reviewed derivation and still refuses any other")
+    func storageContractAcceptsEveryReviewedDigest() throws {
+        let first = SyntheticDerivation.source(names: ["q", "k", "a", "w", "z", "b", "m"])
+        let second = first.replacingOccurrences(of: "EXAMPLE_DIR", with: "OTHER_DIR")
+        let reviewed = try Set([first, second].map { try #require(ClaudeStorageContract.digest(of: $0)) })
+
+        #expect(reviewed.count == 2)
+        #expect(ClaudeStorageContract.matches(SyntheticDerivation.binary(first), digests: reviewed))
+        #expect(ClaudeStorageContract.matches(SyntheticDerivation.binary(second), digests: reviewed))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(first.replacingOccurrences(of: "USER", with: "LOGNAME")), digests: reviewed))
+        #expect(ClaudeStorageContract.reviewedDigests == [
+            "022930836e5b0072c994be8a2be4bebcf17aaba9663b92618989576a2ccf768c",
+            "e63af29300b3a930e8b759080dfd0683ee912be7d50f16effffbf901269e3e6e"
+        ])
     }
 
     @Test("Storage contract scans the whole binary: a late derivation is found, a far second copy is refused")
@@ -2897,9 +2913,9 @@ struct ClaudeLoginManagerTests {
         let digest = try #require(ClaudeStorageContract.digest(of: reviewed))
         let padding = Data(repeating: 0x20, count: 8 << 20)
         let late = padding + SyntheticDerivation.binary(reviewed)
-        #expect(ClaudeStorageContract.matches(late, digest: digest))
-        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed) + padding + Data(reviewed.utf8), digest: digest))
-        #expect(!ClaudeStorageContract.matches(padding + Data(#""-credentials";function"#.utf8), digest: digest),
+        #expect(ClaudeStorageContract.matches(late, digests: [digest]))
+        #expect(!ClaudeStorageContract.matches(SyntheticDerivation.binary(reviewed) + padding + Data(reviewed.utf8), digests: [digest]))
+        #expect(!ClaudeStorageContract.matches(padding + Data(#""-credentials";function"#.utf8), digests: [digest]),
                 "a truncated anchor at the very end is not a match")
     }
 

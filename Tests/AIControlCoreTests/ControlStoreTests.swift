@@ -43,12 +43,13 @@ private func savedLogin(_ account: String, usable: Bool = true) throws -> Claude
 private struct UnexpectedSwitchError: Error {}
 
 enum ClaudeSwitchFailure: CaseIterable {
-    case refused, claudeRunning, unknownAlias, reLoginNeeded, recoveryRequired, cleanupUncertain, unavailable, unverified
+    case refused, claudeRunning, unsupportedBuild, unknownAlias, reLoginNeeded, recoveryRequired, cleanupUncertain, unavailable, unverified
 
     var error: Error {
         switch self {
         case .refused: return ClaudeLoginSelectionError.changedRoots
         case .claudeRunning: return ClaudeProcessPreflightError.active
+        case .unsupportedBuild: return ClaudeRoutingError.unsupportedBuild
         case .unknownAlias: return ClaudeLoginSelectionError.unknownAlias
         case .reLoginNeeded: return ClaudeLoginSelectionError.reLoginNeeded
         case .recoveryRequired: return ClaudeLoginEnvelopeError.recoveryRequired
@@ -64,6 +65,8 @@ enum ClaudeSwitchFailure: CaseIterable {
             return .init(text: "Not switched. Claude or its files changed; close Claude and try again.", offersRecovery: false)
         case .claudeRunning:
             return .init(text: "Not switched. Quit every Claude Code session, then try again.", offersRecovery: false)
+        case .unsupportedBuild:
+            return .init(text: "Not switched. This Claude Code version stores its login differently from the versions AI Control has checked; switching resumes once an AI Control update has reviewed it.", offersRecovery: false)
         case .unknownAlias:
             return .init(text: "beta is no longer a saved login.", offersRecovery: false)
         case .reLoginNeeded:

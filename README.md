@@ -368,7 +368,9 @@ and the account profile in `~/.claude.json`. A switch:
 
 Before touching anything, AI Control checks that the installed Claude Code stores
 its login the way reviewed builds do, and refuses configuration overrides,
-alternate authentication and legacy credential files.
+alternate authentication and legacy credential files. When a Claude Code update
+changes how it stores its login, switching stops with a message until an AI Control
+release has reviewed that version.
 
 **Codex CLI** keeps everything in `~/.codex/auth.json`. A switch re-saves the
 outgoing login (Codex rotates refresh tokens), then replaces the file in one
