@@ -444,6 +444,7 @@ enum ClaudeLoginAppResult: Equatable, Sendable {
     case recoveryChecked
     case refused
     case claudeRunning
+    case unsupportedClaudeBuild
     case unknownAlias
     case reLoginNeeded(String)
     case recoveryRequired
@@ -637,6 +638,7 @@ actor ClaudeLoginAppAdapter {
         case ClaudeLoginSelectionError.cleanupUncertain: return .postCommitCleanupUncertain
         case ClaudeLoginSelectionError.unavailable: return .backendUnavailable
         case ClaudeProcessPreflightError.active: return .claudeRunning
+        case ClaudeRoutingError.unsupportedBuild: return .unsupportedClaudeBuild
         case ClaudeLoginSelectionError.ambiguousOutgoing, ClaudeLoginSelectionError.changedRoots: return .refused
         default: return .unverifiedFailure
         }

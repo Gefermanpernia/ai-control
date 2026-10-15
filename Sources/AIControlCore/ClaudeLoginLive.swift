@@ -24,14 +24,22 @@ import Glibc
 /// short minified names are normalized away, so builds that differ only in those names still match and
 /// any other change fails closed until it is reviewed.
 enum ClaudeStorageContract {
-    /// Digest of the derivation in reviewed Claude Code builds 2.1.280, 2.1.282 and 2.1.283.
-    static let reviewedDigest = "022930836e5b0072c994be8a2be4bebcf17aaba9663b92618989576a2ccf768c"
+    /// Digests of the reviewed derivations. The first is from reviewed builds 2.1.280 to 2.1.283 (2.1.284 and 2.1.296
+    /// measure the same). The second is from 2.1.301,
+    /// which adds a helper that skips the configuration directory under Claude Code's diskless launch option; the
+    /// Keychain service and account derivations are unchanged, so a normal launch stores its login as before.
+    static let reviewedDigests: Set<String> = [
+        "022930836e5b0072c994be8a2be4bebcf17aaba9663b92618989576a2ccf768c",
+        "e63af29300b3a930e8b759080dfd0683ee912be7d50f16effffbf901269e3e6e"
+    ]
 
     private static let anchor = Data(#""-credentials";function "#.utf8)
     private static let end = #""claude-code-user";return §}"#
     private static let keptWords: Set<String> = ["let", "var", "if", "try", "new", "void", "test", "env", "USER"]
 
-    static func matches(_ data: Data, digest: String = reviewedDigest) -> Bool { self.digest(in: data) == digest }
+    static func matches(_ data: Data, digests: Set<String> = reviewedDigests) -> Bool {
+        digest(in: data).map(digests.contains) ?? false
+    }
 
     static func matches(executableAt path: String) -> Bool {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .alwaysMapped) else { return false }

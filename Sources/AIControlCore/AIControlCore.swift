@@ -235,6 +235,9 @@ final class ControlStore: ObservableObject {
         case .claudeRunning:
             return .init(text: "\(alias == nil ? "Recovery not run" : "Not switched"). Quit every Claude Code session, then try again.",
                          offersRecovery: false)
+        case .unsupportedClaudeBuild:
+            return .init(text: "\(alias == nil ? "Recovery not run" : "Not switched"). This Claude Code version stores its login differently from the versions AI Control has checked; switching resumes once an AI Control update has reviewed it.",
+                         offersRecovery: false)
         case .unknownAlias: return .init(text: "\(name) is no longer a saved login.", offersRecovery: false)
         case .reLoginNeeded:
             return .init(text: "\(name) needs a new login. Sign in with Claude, then save it again.", offersRecovery: false)
