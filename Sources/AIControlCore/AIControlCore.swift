@@ -244,6 +244,8 @@ final class ControlStore: ObservableObject {
             return .init(text: "Claude login switching is not available in this build.", offersRecovery: false)
         case .postCommitCleanupUncertain:
             return .init(text: "\(name) may be applied, but cleanup was not confirmed. Run recovery to check.", offersRecovery: true)
+        case .notApplied(let cause):
+            return .init(text: "Not switched. Claude's login was not changed. Cause: \(cause).", offersRecovery: false)
         case .unverifiedFailure:
             return .init(text: alias == nil
                          ? "Recovery could not be verified. Credentials may still need recovery."

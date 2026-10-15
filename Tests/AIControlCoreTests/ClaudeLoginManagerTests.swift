@@ -807,6 +807,29 @@ struct ClaudeLoginManagerTests {
         #expect(fixture.messages == [failure.expectedMessage])
     }
 
+    @Test("The app says a switch was not applied only when Claude's login was not written", arguments: SelectionFailure.allCases)
+    func appSelectionFailuresClaimNoChangeOnlyBeforeWrites(_ failure: SelectionFailure) async throws {
+        let fixture = try SelectionFixture(failure: failure)
+        defer { fixture.cleanup() }
+        let securePreimage = fixture.resources.secureRoot
+        let configurationPreimage = fixture.resources.configurationRoot
+
+        let result = await fixture.runApp { await $0.use(alias: "beta") }
+
+        if failure.expectedExit == 4 || failure.expectedPhase == .pending {
+            #expect(result == .recoveryRequired)
+        } else if failure.expectedMessage == "Blocked: selection applied but cleanup is uncertain." {
+            #expect(result == .postCommitCleanupUncertain)
+        } else {
+            #expect(result == .notApplied(failure == .checkpointReadback ? "ClaudeLoginEnvelopeError.readbackMismatch" : "FixtureError"))
+            #expect(failure.expectedResourceEvents.isEmpty)
+            #expect(fixture.resources.events.isEmpty)
+            #expect(fixture.resources.secureRoot == securePreimage)
+            #expect(fixture.resources.configurationRoot == configurationPreimage)
+            #expect(try fixture.custody.loadRecoveryRecord().journal == nil)
+        }
+    }
+
     @Test("Secure owned postimage is verified before configuration replacement", arguments: SelectionFailure.securePostimageCases)
     func securePostimagePrecedesConfiguration(_ failure: SelectionFailure) throws {
         let fixture = try SelectionFixture(failure: failure)
@@ -2981,6 +3004,20 @@ struct ClaudeLoginManagerTests {
     func appAdapterReportsRunningClaude() async {
         let adapter = ClaudeLoginAppAdapter(makeBackend: { AppResultBackend(selectionError: ClaudeProcessPreflightError.active) })
         #expect(await adapter.use(alias: "alpha") == .claudeRunning)
+    }
+
+    @Test("A switch that fails before any write names its cause by type and case only")
+    func appAdapterNamesUnclassifiedCause() async {
+        let cases: [(Error, String)] = [
+            (ManagerFileLockError.contended, "ManagerFileLockError.contended"),
+            (IsolatedKeychainError.cancelled, "IsolatedKeychainError.cancelled"),
+            (IsolatedKeychainError.operatingSystem(-25293), "IsolatedKeychainError.operatingSystem"),
+            (FixtureError(), "FixtureError")
+        ]
+        for (error, name) in cases {
+            let adapter = ClaudeLoginAppAdapter(makeBackend: { AppResultBackend(selectionError: error) })
+            #expect(await adapter.use(alias: "alpha") == .notApplied(name))
+        }
     }
 
     @Test("Terminal commands explain a running Claude and an unreviewed Claude build")

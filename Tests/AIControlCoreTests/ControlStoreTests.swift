@@ -75,7 +75,7 @@ enum ClaudeSwitchFailure: CaseIterable {
         case .unavailable:
             return .init(text: "Claude login switching is not available in this build.", offersRecovery: false)
         case .unverified:
-            return .init(text: "The switch could not be verified and credentials may have changed. Run recovery to check.", offersRecovery: true)
+            return .init(text: "Not switched. Claude's login was not changed. Cause: UnexpectedSwitchError.", offersRecovery: false)
         }
     }
 }
@@ -173,7 +173,7 @@ struct ControlStoreTests {
         #expect(store.claudeNotice?.text == "Switched Claude to beta.")
     }
 
-    @Test("Switch failures stay distinct and never claim unchanged credentials", arguments: ClaudeSwitchFailure.allCases)
+    @Test("Switch failures stay distinct and claim an unchanged login only before any write", arguments: ClaudeSwitchFailure.allCases)
     func switchFailuresStayDistinct(_ failure: ClaudeSwitchFailure) async throws {
         let store = makeStore(claudeBackend: try SavedLoginBackend(betaUsable: true, selectionError: failure.error))
         try await #require(store.reloadClaudeLogins()).value
