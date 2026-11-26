@@ -260,7 +260,7 @@ Everything in the menu is also available from the terminal:
 | `aic renew <name>` / `aic codex renew <name>` | Renew a saved account's login now |
 | `aic recover` | Finish or undo an interrupted Claude switch |
 | `aic status --json [--usage]` | Saved accounts, and optionally their usage, as JSON for scripts |
-| `aic settings` | Show the refresh and automatic switching options |
+| `aic settings` | Show the refresh, automatic switching and Gentle Shell sync options |
 | `aic settings set <option> <value>` | Change one of them (see below) |
 | `aic auto-switch order claude\|codex` | Show the priority order |
 | `aic auto-switch move claude\|codex <name> up\|down` | Move an account in the priority order |
@@ -344,6 +344,50 @@ automatic switching is on for a provider:
   ```sh
   systemctl --user enable --now ai-control-auto-switch.timer
   ```
+
+## Gentle Shell sync (Codex)
+
+Gentle Shell keeps its own Codex login
+(the `openai-codex` entry in its agent folder's `auth.json`), so by default it does
+not follow a Codex switch. Turn on sync to have every Codex switch (click, `aic codex
+use`, the terminal UI or automatic switching) write that login too:
+
+```sh
+aic settings set gentle-shell-sync on
+```
+
+| Option | `aic settings set …` | Default |
+|---|---|---|
+| Switch Gentle Shell with Codex | `gentle-shell-sync on\|off` | off |
+| Gentle Shell agent folder | `gentle-shell-agent-dir <absolute path>\|auto` | auto |
+
+With `auto`, the agent folder is the first that exists of `GENTLE_PI_AGENT_HOME`,
+`PI_CODING_AGENT_DIR`, the `Agent` folder named in Gentle Shell's
+`~/.local/share/gentle-shell/install/installation.json` (under `XDG_DATA_HOME` when
+set), and `~/.gentle-shell/agent`. A folder named by the setting or by one of those
+variables that does not exist is never replaced by a guess. `aic status --json` shows
+the result under `codex.gentleShell`: `sync` is `off`, `on` or
+`agent-folder-missing`, with the `agentDirectory` in use.
+
+A switch then works like this:
+
+- Gentle Shell's `auth.json` is held under the same lock Gentle Shell uses
+  (`auth.json.lock`) from the first read to the last write; if Gentle Shell is
+  writing it, the switch stops and nothing changes.
+- Gentle Shell rotates its refresh token too. If it holds a newer login for a saved
+  account, that login is saved first, so it is never lost.
+- If Gentle Shell is signed in to a Codex account AI Control has not saved, the
+  switch stops before writing anything.
+- Only the `openai-codex` entry changes; every other login in the file is kept. The
+  file is replaced in one atomic rename, owner-only (`0600`).
+- If the agent folder is not found, Codex still switches and AI Control says
+  Gentle Shell was not changed.
+
+> **Note.** After a switch, the Codex CLI and Gentle Shell hold the same login, and
+> each refreshes it on its own. Whichever refreshes first leaves the other with an
+> outdated refresh token, which can cause an occasional sign-in error in the other
+> one. Switching again (or switching to the same account) copies the newest login
+> back to both.
 
 ## Two rules that keep saved logins valid
 

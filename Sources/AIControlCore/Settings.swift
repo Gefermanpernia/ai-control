@@ -46,12 +46,29 @@ struct AIControlSettings: Codable, Equatable {
         }
     }
 
+    /// Whether a Codex switch also writes Gentle Shell's own Codex login, and where its agent folder is
+    /// (nil finds it from the environment or the installer).
+    struct GentleShell: Codable, Equatable {
+        var sync = false
+        var agentDirectory: String?
+
+        init() {}
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            sync = try values.decodeIfPresent(Bool.self, forKey: .sync) ?? false
+            agentDirectory = (try values.decodeIfPresent(String.self, forKey: .agentDirectory)).flatMap {
+                $0.hasPrefix("/") ? $0 : nil
+            }
+        }
+    }
+
     static let minimumInterval = 300
     static let thresholds = 50...100
 
     var version = 1
     var refresh = Refresh()
     var autoSwitch = AutoSwitch()
+    var gentleShell = GentleShell()
 
     enum Provider { case claude, codex }
 
@@ -71,6 +88,7 @@ struct AIControlSettings: Codable, Equatable {
         version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
         refresh = try values.decodeIfPresent(Refresh.self, forKey: .refresh) ?? .init()
         autoSwitch = try values.decodeIfPresent(AutoSwitch.self, forKey: .autoSwitch) ?? .init()
+        gentleShell = try values.decodeIfPresent(GentleShell.self, forKey: .gentleShell) ?? .init()
     }
 }
 
@@ -141,8 +159,8 @@ private let hasLinuxSystemd = false
 func runSettings(arguments: [String], store: SettingsStore = .live,
                  systemdUser: ([String]) -> Int32? = runSystemdUser, linuxSystemd: Bool = hasLinuxSystemd,
                  output: (String) -> Void) -> Int32 {
-    let usage = "Usage: AIControl settings [set refresh|auto-switch-claude|auto-switch-codex|background-refresh on|off" +
-        " | set refresh-interval <seconds> | set auto-switch-threshold <percent>]"
+    let usage = "Usage: AIControl settings [set refresh|auto-switch-claude|auto-switch-codex|background-refresh|gentle-shell-sync on|off" +
+        " | set refresh-interval <seconds> | set auto-switch-threshold <percent> | set gentle-shell-agent-dir <absolute path>|auto]"
     if arguments == ["settings"] {
         do {
             let encoder = JSONEncoder()
@@ -164,6 +182,12 @@ func runSettings(arguments: [String], store: SettingsStore = .live,
     case "auto-switch-claude": guard let on = toggle else { output(usage); return 2 }; change = { $0.autoSwitch.claude = on }
     case "auto-switch-codex": guard let on = toggle else { output(usage); return 2 }; change = { $0.autoSwitch.codex = on }
     case "background-refresh": guard let on = toggle else { output(usage); return 2 }; change = { $0.autoSwitch.background = on }
+    case "gentle-shell-sync": guard let on = toggle else { output(usage); return 2 }; change = { $0.gentleShell.sync = on }
+    case "gentle-shell-agent-dir":
+        guard value == "auto" || value.hasPrefix("/") else {
+            output("The Gentle Shell agent folder must be an absolute path, or auto."); return 2
+        }
+        change = { $0.gentleShell.agentDirectory = value == "auto" ? nil : value }
     case "refresh-interval":
         guard let seconds = number, seconds >= AIControlSettings.minimumInterval else {
             output("The refresh interval must be a whole number of seconds, 300 or more."); return 2

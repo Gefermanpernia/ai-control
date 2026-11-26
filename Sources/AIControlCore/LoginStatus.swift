@@ -85,18 +85,40 @@ struct LoginStatus: Codable {
                 try container.encode(usageError, forKey: .usageError)
             }
         }
+        /// Whether a switch also writes Gentle Shell's Codex login: `off`, `on`, or `agent-folder-missing`.
+        struct GentleShell: Codable {
+            let sync: String
+            let agentDirectory: String?
+
+            init(_ state: GentleShellSync) {
+                switch state {
+                case .off: (sync, agentDirectory) = ("off", nil)
+                case .agentDirectoryMissing: (sync, agentDirectory) = ("agent-folder-missing", nil)
+                case .on(let directory): (sync, agentDirectory) = ("on", directory)
+                }
+            }
+
+            enum CodingKeys: String, CodingKey { case sync, agentDirectory }
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(sync, forKey: .sync)
+                try container.encode(agentDirectory, forKey: .agentDirectory)
+            }
+        }
         let available: Bool
         let inUse: String?
         let logins: [Login]
         let installed: Bool
+        var gentleShell = GentleShell(.off)
 
-        enum CodingKeys: String, CodingKey { case available, inUse, logins, installed }
+        enum CodingKeys: String, CodingKey { case available, inUse, logins, installed, gentleShell }
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(available, forKey: .available)
             try container.encode(installed, forKey: .installed)
             try container.encode(inUse, forKey: .inUse)
             try container.encode(logins, forKey: .logins)
+            try container.encode(gentleShell, forKey: .gentleShell)
         }
     }
 
@@ -195,7 +217,7 @@ func loginStatus(claude: ClaudeLoginAppAdapter, codex: CodexLoginAppAdapter, inc
         codexState = .init(available: true, inUse: listing.inUse, logins: listing.logins.map { login in
             let (usage, error) = statusUsage(codexUsage[login.name])
             return .init(name: login.name, email: login.email, usage: usage, usageError: error)
-        }, installed: installed.codex)
+        }, installed: installed.codex, gentleShell: .init(await codex.gentleShell()))
     } else {
         codexState = .init(available: false, inUse: nil, logins: [], installed: installed.codex)
     }

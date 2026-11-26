@@ -52,12 +52,53 @@ struct SettingsTests {
                           ["settings", "set", "auto-switch-threshold", "49"],
                           ["settings", "set", "auto-switch-threshold", "101"],
                           ["settings", "set", "refresh", "maybe"],
+                          ["settings", "set", "gentle-shell-sync", "maybe"],
+                          ["settings", "set", "gentle-shell-agent-dir", "relative/agent"],
                           ["settings", "set", "colour", "on"]] {
             let (code, lines) = run(arguments, store)
             #expect(code == 2, "\(arguments)")
             #expect(lines.last != nil && lines.last != "Saved.", "\(arguments)")
         }
         #expect(!FileManager.default.fileExists(atPath: store.path))
+    }
+
+    @Test("Gentle Shell sync is off by default; set turns it on and names or forgets its agent folder")
+    func gentleShellSettings() throws {
+        let (store, root) = try store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(try store.load().gentleShell == .init())
+        #expect(try JSONDecoder().decode(AIControlSettings.self, from: Data(#"{"version":1}"#.utf8)).gentleShell.sync == false)
+
+        #expect(run(["settings", "set", "gentle-shell-sync", "on"], store) == (0, ["Saved."]))
+        #expect(run(["settings", "set", "gentle-shell-agent-dir", "/Users/someone/agent"], store) == (0, ["Saved."]))
+        var settings = try store.load()
+        #expect(settings.gentleShell.sync && settings.gentleShell.agentDirectory == "/Users/someone/agent")
+        #expect(!settings.refresh.enabled && !settings.autoSwitch.codex)
+
+        #expect(run(["settings", "set", "gentle-shell-agent-dir", "auto"], store) == (0, ["Saved."]))
+        #expect(run(["settings", "set", "gentle-shell-sync", "off"], store) == (0, ["Saved."]))
+        settings = try store.load()
+        #expect(!settings.gentleShell.sync && settings.gentleShell.agentDirectory == nil)
+
+        let refused = run(["settings", "set", "gentle-shell-agent-dir", "relative/agent"], store)
+        #expect(refused == (2, ["The Gentle Shell agent folder must be an absolute path, or auto."]))
+        #expect(run(["settings"], store).1 ==
+            [#"{"autoSwitch":{"background":false,"claude":false,"claudeOrder":[],"codex":false,"codexOrder":[],"thresholdPercent":99},"# +
+             #""gentleShell":{"sync":false},"refresh":{"enabled":false,"intervalSeconds":300},"version":1}"#])
+    }
+
+    @Test("The switch uses Gentle Shell only when sync is on, at the folder the settings or the system name")
+    func gentleShellSyncFromSettings() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("gs-settings-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let agent = home + "/.gentle-shell/agent"
+        try FileManager.default.createDirectory(atPath: agent, withIntermediateDirectories: true)
+        var settings = AIControlSettings()
+        #expect(GentleShellSync.configured(settings, home: home, environment: [:]) == .off)
+        settings.gentleShell.sync = true
+        #expect(GentleShellSync.configured(settings, home: home, environment: [:]) == .on(agentDirectory: agent))
+        settings.gentleShell.agentDirectory = home + "/elsewhere"
+        #expect(GentleShellSync.configured(settings, home: home, environment: [:]) == .agentDirectoryMissing)
     }
 
     @Test("Timer follows effective background state, not unrelated settings changes")
@@ -171,7 +212,7 @@ struct SettingsTests {
         let (code, lines) = run(["settings"], store)
         #expect(code == 0)
         let object = try #require(JSONSerialization.jsonObject(with: Data(lines.joined().utf8)) as? [String: Any])
-        #expect(object.keys.sorted() == ["autoSwitch", "refresh", "version"])
+        #expect(object.keys.sorted() == ["autoSwitch", "gentleShell", "refresh", "version"])
         let autoSwitch = try #require(object["autoSwitch"] as? [String: Any])
         #expect(autoSwitch.keys.sorted() == ["background", "claude", "claudeOrder", "codex", "codexOrder", "thresholdPercent"])
     }

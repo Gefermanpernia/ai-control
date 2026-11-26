@@ -108,10 +108,12 @@ struct CodexLoginSystem {
         // Codex on Linux defaults to auth.json; a Secret Service login is not detected here.
         let keyringHoldsLogin = { false }
         #endif
+        let settings = (try? SettingsStore(directory: data).load()) ?? .init()
         return .init(
             authPath: home + "/auth.json", store: store,
             acquireLock: { try ManagerFileLock.acquire(directory: data + "/codex") },
-            keyringHoldsLogin: keyringHoldsLogin
+            keyringHoldsLogin: keyringHoldsLogin,
+            gentleShell: .configured(settings, home: NSHomeDirectory(), environment: environment)
         )
     }
 }
@@ -469,6 +471,9 @@ actor CodexLoginAppAdapter {
     ) -> CodexLoginAppAdapter {
         ClaudeLiveSystem.isEnabled(environment: environment) ? .init(makeSystem: { .current }, services: .live) : .init()
     }
+
+    /// Whether a switch also writes Gentle Shell's Codex login.
+    func gentleShell() -> GentleShellSync { makeSystem?().gentleShell ?? .off }
 
     func list() -> CodexLoginAppResult {
         guard let manager else { return .unavailable }

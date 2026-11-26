@@ -10,6 +10,14 @@ enum GentleShellSync: Equatable {
     case off
     case agentDirectoryMissing
     case on(agentDirectory: String)
+
+    static func configured(_ settings: AIControlSettings, home: String, environment: [String: String]) -> Self {
+        guard settings.gentleShell.sync else { return .off }
+        guard let directory = GentleShellAgentDirectory.resolve(
+            configured: settings.gentleShell.agentDirectory, home: home, environment: environment
+        ) else { return .agentDirectoryMissing }
+        return .on(agentDirectory: directory)
+    }
 }
 
 /// What a Codex switch changed.

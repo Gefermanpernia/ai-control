@@ -36,6 +36,7 @@ private final class StatusCodexStore: ClaudeLoginDataStore {
 private final class StatusCodexFixture: @unchecked Sendable {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("status-codex-\(UUID().uuidString)")
     let store: StatusCodexStore
+    var gentleShell: GentleShellSync = .off
     init(saved: [String: Data]) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         store = StatusCodexStore(try JSONEncoder().encode(CodexLoginState(logins: saved)))
@@ -43,7 +44,7 @@ private final class StatusCodexFixture: @unchecked Sendable {
     var system: CodexLoginSystem {
         .init(authPath: directory.appendingPathComponent("auth.json").path, store: store,
               acquireLock: { [directory] in try ManagerFileLock.acquire(directory: directory.appendingPathComponent("lock").path) },
-              keyringHoldsLogin: { false })
+              keyringHoldsLogin: { false }, gentleShell: gentleShell)
     }
     var live: Data? {
         get { FileManager.default.contents(atPath: directory.appendingPathComponent("auth.json").path) }
@@ -111,12 +112,30 @@ struct LoginStatusTests {
         #expect(ca["name"] as? String == "work" && ca["needsLogin"] as? Bool == false)
         #expect(ca["usage"] is NSNull && ca["usageError"] is NSNull)
         let x = try #require(root["codex"] as? [String: Any])
-        #expect(x.keys.sorted() == ["available", "inUse", "installed", "logins"])
+        #expect(x.keys.sorted() == ["available", "gentleShell", "inUse", "installed", "logins"])
         #expect(x["available"] as? Bool == true && x["inUse"] as? String == "home")
+        #expect(x["gentleShell"] as? NSDictionary == ["sync": "off", "agentDirectory": NSNull()] as NSDictionary)
         let xa = try #require((x["logins"] as? [[String: Any]])?.first)
         #expect(xa.keys.sorted() == ["email", "name", "usage", "usageError"])
         #expect(xa["email"] as? String == "a@example.com")
         #expect(xa["usage"] is NSNull && xa["usageError"] is NSNull)
+    }
+
+    @Test("Status shows whether a Codex switch also writes Gentle Shell's login, and where")
+    func gentleShellSyncState() async throws {
+        let fixture = try StatusCodexFixture(saved: ["home": auth()])
+        defer { fixture.cleanup() }
+        let backend = StatusClaudeBackend(.init(snapshots: [:], activeAlias: nil))
+        func state() async throws -> NSDictionary? {
+            let (claude, codex) = adapters(claude: backend, codex: fixture,
+                                            claudeFetch: { _ in throw StatusFailure() }, codexFetch: { _ in throw StatusFailure() })
+            let root = try document(await loginStatus(claude: claude, codex: codex, includeUsage: false, monitors: noMonitors))
+            return (root["codex"] as? [String: Any])?["gentleShell"] as? NSDictionary
+        }
+        fixture.gentleShell = .on(agentDirectory: "/fake/agent")
+        #expect(try await state() == ["sync": "on", "agentDirectory": "/fake/agent"] as NSDictionary)
+        fixture.gentleShell = .agentDirectoryMissing
+        #expect(try await state() == ["sync": "agent-folder-missing", "agentDirectory": NSNull()] as NSDictionary)
     }
 
     @Test("Monitor JSON has explicit nulls, never exposes the key, and avoids fetch without opt-in")
