@@ -3,3 +3,5 @@
 .atl/
 dist/
 tui/target/
+integrations/omniwm/e2e/vendor/
+integrations/omniwm/.test-run-*/
