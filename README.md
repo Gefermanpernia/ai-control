@@ -345,6 +345,13 @@ automatic switching is on for a provider:
   systemctl --user enable --now ai-control-auto-switch.timer
   ```
 
+## OmniWM workspace bar
+
+If [OmniWM](https://omniwm.app) hides the macOS menu bar, the AI Control icon is hidden
+too. [`integrations/omniwm`](integrations/omniwm/INSTALL.md) adds AI Control to OmniWM's
+workspace bar: switch accounts, see usage, rename and reorder accounts, and change
+settings from a bar chip. It talks to `aic` through a small local bridge.
+
 ## Two rules that keep saved logins valid
 
 1. **Never log out** with `/logout`, `claude auth logout` or `codex logout`.

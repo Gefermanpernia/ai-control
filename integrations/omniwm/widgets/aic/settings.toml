@@ -1,0 +1,15 @@
+capabilities = { network = ["127.0.0.1"], purpose = "Read AI Control status and switch saved logins through your authenticated local bridge." }
+
+[options.token]
+type = "string"
+title = "Bridge bearer token (stored as plaintext; not a secret store)"
+default = ""
+maxLength = 128
+
+[options.port]
+type = "number"
+title = "Bridge port"
+default = 47820
+min = 1
+max = 65535
+step = 1
