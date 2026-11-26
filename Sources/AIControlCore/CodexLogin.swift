@@ -192,6 +192,8 @@ struct CodexLoginManager {
             }
         }
         guard let target = state.logins[alias] else { throw CodexLoginError.unknownAlias }
+        // A login Gentle Shell could not use is refused before anything is written.
+        let desired = try gentleShell.map { _ in try GentleShellCodexEntry(codexLogin: target) }
         if live != target {
             system.beforeReplace()
             try CodexAuthFile.replace(path: system.authPath, expected: live, with: target)
@@ -203,8 +205,7 @@ struct CodexLoginManager {
         case .on: break
         }
         do {
-            let desired = try GentleShellCodexEntry(codexLogin: target)
-            if let gentleShell, try gentleShell.codexEntry() != desired { try gentleShell.write(desired) }
+            if let gentleShell, let desired, try gentleShell.codexEntry() != desired { try gentleShell.write(desired) }
         } catch { throw CodexLoginError.gentleShellWriteFailed }
         return .withGentleShell
     }
@@ -425,8 +426,15 @@ actor CodexLoginAppAdapter {
             return .blocked(error.message(name: alias, liveEmail: manager.liveIdentity()?.email))
         } catch { return .blocked("Blocked: saved Codex logins are unavailable.") }
         do { try services.signIn() } catch {
-            if let previous { _ = try? manager.use(previous) }
             let message = previous == nil ? "Sign-in did not finish." : "Sign-in did not finish; your previous Codex login is back."
+            if let previous {
+                do { try manager.use(previous) } catch {
+                    let reason = (error as? CodexLoginError)?.message(name: previous, liveEmail: nil)
+                        ?? "Blocked: saved Codex logins are unavailable."
+                    return .blocked("Sign-in did not finish, and your previous Codex login could not be put back: " +
+                                    "it is still saved as \(previous). " + reason)
+                }
+            }
             if let nativeError = error as? NativeCodexRequired {
                 return .blocked(message + " " + nativeError.localizedDescription)
             }

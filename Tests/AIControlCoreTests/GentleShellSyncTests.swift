@@ -146,6 +146,53 @@ struct GentleShellSyncTests {
         ])
     }
 
+    @Test("A target Gentle Shell cannot use is refused before either file is written")
+    func unusableTargetRefusedBeforeWriting() throws {
+        let fixture = try CodexFixture()
+        defer { fixture.cleanup() }
+        var root = try json(try codexAuth(account: "acct-a", email: "a@example.com", refresh: "ra1"))
+        var tokens = try #require(root["tokens"] as? [String: Any])
+        tokens.removeValue(forKey: "access_token")
+        root["tokens"] = tokens
+        fixture.live = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        #expect(fixture.run("save", "work") == 0)
+        let home = try codexAuth(account: "acct-b", email: "b@example.com", refresh: "rb1", accessExpiry: 1_800_001_000)
+        fixture.live = home
+        #expect(fixture.run("save", "home") == 0)
+        let current = try gentleShellFile(["openai-codex": try entry(account: "acct-b", refresh: "rb1", expiry: 1_800_001_000)])
+        fixture.gentleShellAuth = current
+        fixture.gentleShell = .on(agentDirectory: fixture.agentDirectory)
+
+        #expect(fixture.run("use", "work") == 3)
+
+        #expect(fixture.live == home)
+        #expect(fixture.gentleShellAuth == current)
+        #expect(fixture.messages.last == "Blocked: only ChatGPT sign-in Codex logins can be saved or switched.")
+    }
+
+    @Test("When the previous login cannot be put back after a failed sign-in, the message says so")
+    func failedRestoreIsReported() async throws {
+        let fixture = try CodexFixture()
+        defer { fixture.cleanup() }
+        fixture.live = try codexAuth(account: "acct-a", email: "a@example.com", refresh: "ra1", accessExpiry: 1_800_001_000)
+        #expect(fixture.run("save", "work") == 0)
+        fixture.gentleShellAuth = try gentleShellFile([
+            "openai-codex": try entry(account: "acct-z", refresh: "rz", expiry: 1_800_001_000)
+        ])
+        fixture.gentleShell = .on(agentDirectory: fixture.agentDirectory)
+        struct SignInFailed: Error {}
+        let adapter = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
+            fetch: { _ in Data() }, signIn: { throw SignInFailed() }, renew: { $0 }
+        ))
+
+        #expect(await adapter.add(alias: "home") == .blocked(
+            "Sign-in did not finish, and your previous Codex login could not be put back: it is still saved as work. " +
+            "Blocked: Gentle Shell is signed in to a Codex account AI Control has not saved; nothing was changed. " +
+            "Save that account in AI Control or turn off gentle-shell-sync."
+        ))
+        #expect(fixture.live == nil)
+    }
+
     @Test("A missing agent folder switches Codex only and says Gentle Shell was not changed")
     func missingAgentFolderSwitchesCodexOnly() throws {
         let fixture = try CodexFixture()
