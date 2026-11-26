@@ -16,6 +16,7 @@ struct CodexLoginIdentity: Equatable, Sendable {
 enum CodexLoginError: Error, Equatable {
     case unsupportedAuth, noLiveLogin, unknownAlias, unsavedLiveLogin, alreadySaved(String), aliasTaken
     case tooMany, keyringStorage, changedDuringSwitch, readbackMismatch, writeFailed
+    case gentleShellUnsaved, gentleShellBusy, gentleShellUnreadable, gentleShellWriteFailed
 
     /// `name` is the alias the command targeted; `liveEmail` names the account in auth.json.
     func message(name: String, liveEmail: String?) -> String {
@@ -31,6 +32,13 @@ enum CodexLoginError: Error, Equatable {
         case .keyringStorage: return "Blocked: Codex keeps its login in the Keychain; only auth.json logins can be switched."
         case .changedDuringSwitch: return "Blocked: Codex changed its login during the switch; try again."
         case .readbackMismatch, .writeFailed: return "Blocked: the Codex login could not be written; check ~/.codex/auth.json."
+        case .gentleShellUnsaved:
+            return "Blocked: Gentle Shell is signed in to a Codex account AI Control has not saved; nothing was changed. " +
+                "Save that account in AI Control or turn off gentle-shell-sync."
+        case .gentleShellBusy: return "Blocked: Gentle Shell is updating its login; nothing was changed. Try again."
+        case .gentleShellUnreadable: return "Blocked: Gentle Shell's auth.json could not be read; nothing was changed."
+        case .gentleShellWriteFailed:
+            return "Switched Codex to \(name), but Gentle Shell's Codex login could not be written; check its auth.json."
         }
     }
 }
@@ -80,6 +88,11 @@ struct CodexLoginSystem {
     let acquireLock: () throws -> ManagerFileLock
     let keyringHoldsLogin: () -> Bool
     var beforeReplace: () -> Void = {}
+    /// Gentle Shell's own Codex login, written with every switch while sync is on.
+    var gentleShell: GentleShellSync = .off
+    /// How long to wait for Gentle Shell to finish writing its login before giving up.
+    var gentleShellLockWait: TimeInterval = 2
+    var now: () -> Date = Date.init
 
     static var current: Self {
         let environment = ProcessInfo.processInfo.environment
@@ -139,13 +152,14 @@ struct CodexLoginManager {
         return identity
     }
 
-    func use(_ alias: String) throws {
+    @discardableResult
+    func use(_ alias: String) throws -> CodexSwitchOutcome {
         let lock = try system.acquireLock()
         defer { lock.release() }
         guard !system.keyringHoldsLogin() else { throw CodexLoginError.keyringStorage }
         var state = try load()
-        guard let target = state.logins[alias] else { throw CodexLoginError.unknownAlias }
-        _ = try CodexAuthFile.identity(target)
+        guard let chosen = state.logins[alias] else { throw CodexLoginError.unknownAlias }
+        _ = try CodexAuthFile.identity(chosen)
         let live = system.liveData()
         if let live {
             // Keep the outgoing account's latest refresh token: Codex rotates it on every refresh.
@@ -157,10 +171,40 @@ struct CodexLoginManager {
                 try persist(state)
             }
         }
-        guard live != state.logins[alias] else { return }
-        system.beforeReplace()
-        try CodexAuthFile.replace(path: system.authPath, expected: live, with: target)
-        guard system.liveData() == target else { throw CodexLoginError.readbackMismatch }
+        // Gentle Shell rotates its refresh token too: keep its copy when it is newer, and refuse before
+        // writing anything when it holds an account that would otherwise be lost.
+        var gentleShell: GentleShellAuthFile?
+        defer { gentleShell?.release() }
+        if case .on(let directory) = system.gentleShell {
+            let file = try GentleShellAuthFile(agentDirectory: directory, wait: system.gentleShellLockWait)
+            gentleShell = file
+            if let entry = try file.codexEntry() {
+                guard let source = self.alias(forAccount: entry.accountID, in: state), let saved = state.logins[source] else {
+                    throw CodexLoginError.gentleShellUnsaved
+                }
+                let ours = try GentleShellCodexEntry(codexLogin: saved)
+                if entry.expires > ours.expires && entry.refresh != ours.refresh {
+                    state.logins[source] = try entry.adopted(into: saved, at: system.now())
+                    try persist(state)
+                }
+            }
+        }
+        guard let target = state.logins[alias] else { throw CodexLoginError.unknownAlias }
+        if live != target {
+            system.beforeReplace()
+            try CodexAuthFile.replace(path: system.authPath, expected: live, with: target)
+            guard system.liveData() == target else { throw CodexLoginError.readbackMismatch }
+        }
+        switch system.gentleShell {
+        case .off: return .codexOnly
+        case .agentDirectoryMissing: return .gentleShellAgentDirectoryMissing
+        case .on: break
+        }
+        do {
+            let desired = try GentleShellCodexEntry(codexLogin: target)
+            if let gentleShell, try gentleShell.codexEntry() != desired { try gentleShell.write(desired) }
+        } catch { throw CodexLoginError.gentleShellWriteFailed }
+        return .withGentleShell
     }
 
     /// `codex login` revokes whatever login auth.json holds, so re-save it and move it out of the way first.
@@ -210,7 +254,11 @@ struct CodexLoginManager {
     }
 
     private func alias(for identity: CodexLoginIdentity, in state: CodexLoginState) -> String? {
-        state.logins.first { (try? CodexAuthFile.identity($0.value))?.accountID == identity.accountID }?.key
+        alias(forAccount: identity.accountID, in: state)
+    }
+
+    private func alias(forAccount accountID: String, in state: CodexLoginState) -> String? {
+        state.logins.first { (try? CodexAuthFile.identity($0.value))?.accountID == accountID }?.key
     }
 
     private func load() throws -> CodexLoginState {
@@ -251,8 +299,12 @@ func runCodexLogins(arguments: [String], system: CodexLoginSystem = .current, ou
             let identity = try manager.save(command[1])
             output("Saved Codex login \(command[1]) (\(identity.email ?? "unknown email")).")
         case "use" where command.count == 2 && valid(command[1]):
-            try manager.use(command[1])
-            output("Switched Codex to \(command[1]).")
+            switch try manager.use(command[1]) {
+            case .codexOnly: output("Switched Codex to \(command[1]).")
+            case .withGentleShell: output("Switched Codex and Gentle Shell to \(command[1]).")
+            case .gentleShellAgentDirectoryMissing:
+                output("Switched Codex to \(command[1]). Gentle Shell was not changed: its agent folder was not found.")
+            }
         case "prepare-login" where command.count == 1:
             if let alias = try manager.prepareLogin() {
                 output("Saved \(alias); auth.json cleared for codex login.")
@@ -371,7 +423,7 @@ actor CodexLoginAppAdapter {
             return .blocked(error.message(name: alias, liveEmail: manager.liveIdentity()?.email))
         } catch { return .blocked("Blocked: saved Codex logins are unavailable.") }
         do { try services.signIn() } catch {
-            if let previous { try? manager.use(previous) }
+            if let previous { _ = try? manager.use(previous) }
             let message = previous == nil ? "Sign-in did not finish." : "Sign-in did not finish; your previous Codex login is back."
             if let nativeError = error as? NativeCodexRequired {
                 return .blocked(message + " " + nativeError.localizedDescription)
