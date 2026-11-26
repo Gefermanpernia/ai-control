@@ -271,6 +271,26 @@ struct GentleShellSyncTests {
         }
     }
 
+    @Test("When auth.json cannot be written, usage adoption leaves the saved copy as it was")
+    func usageAdoptionWriteFailureChangesNothing() async throws {
+        let fixture = try CodexFixture()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.directory.path)
+            fixture.cleanup()
+        }
+        let saved = try twoSavedLogins(fixture)
+        fixture.gentleShellAuth = try gentleShellFile([
+            "openai-codex": try entry(account: "acct-b", refresh: "rb2", expiry: 1_800_009_000)
+        ])
+        fixture.gentleShell = .on(agentDirectory: fixture.agentDirectory)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: fixture.directory.path)
+
+        #expect(throws: CodexLoginError.writeFailed) { try CodexLoginManager(system: fixture.system).adoptGentleShellLogin() }
+
+        #expect(fixture.live == saved.home)
+        #expect(try savedRefresh(fixture, "home") == "rb1")
+    }
+
     @Test("A missing agent folder switches Codex only and says Gentle Shell was not changed")
     func missingAgentFolderSwitchesCodexOnly() throws {
         let fixture = try CodexFixture()

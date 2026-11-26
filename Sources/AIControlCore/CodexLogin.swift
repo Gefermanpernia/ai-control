@@ -220,18 +220,27 @@ struct CodexLoginManager {
         defer { lock.release() }
         guard let live = system.liveData() else { return false }
         let identity = try CodexAuthFile.identity(live)
+        // Only read here, so Gentle Shell gets its lock back before the slower saved-login update.
         let file = try GentleShellAuthFile(agentDirectory: directory, wait: system.gentleShellLockWait)
-        defer { file.release() }
-        guard let entry = try file.codexEntry(), entry.accountID == identity.accountID else { return false }
+        let read = Result { try file.codexEntry() }
+        file.release()
+        guard let entry = try read.get(), entry.accountID == identity.accountID else { return false }
         let ours = try GentleShellCodexEntry(codexLogin: live)
         guard entry.expires > ours.expires, entry.refresh != ours.refresh else { return false }
         var state = try load()
         guard let alias = alias(for: identity, in: state) else { return false }
+        let previous = state.logins[alias]
         let adopted = try entry.adopted(into: live, at: system.now())
         state.logins[alias] = adopted
         try persist(state)
-        try CodexAuthFile.replace(path: system.authPath, expected: live, with: adopted)
-        guard system.liveData() == adopted else { throw CodexLoginError.readbackMismatch }
+        do {
+            try CodexAuthFile.replace(path: system.authPath, expected: live, with: adopted)
+            guard system.liveData() == adopted else { throw CodexLoginError.readbackMismatch }
+        } catch {
+            // auth.json kept its login, so the saved copy goes back to match it.
+            if system.liveData() == live { state.logins[alias] = previous; try? persist(state) }
+            throw error
+        }
         return true
     }
 
