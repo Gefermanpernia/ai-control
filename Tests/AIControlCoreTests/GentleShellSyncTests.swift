@@ -271,7 +271,8 @@ struct GentleShellSyncTests {
         }
     }
 
-    @Test("When auth.json cannot be written, usage adoption leaves the saved copy as it was")
+    @Test("When auth.json cannot be written, usage adoption leaves the saved copy as it was",
+          .enabled(if: geteuid() != 0, "root ignores folder permissions, so the write cannot be made to fail"))
     func usageAdoptionWriteFailureChangesNothing() async throws {
         let fixture = try CodexFixture()
         defer {
