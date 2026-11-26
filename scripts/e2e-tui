@@ -33,7 +33,9 @@ grep -q 'inside WSL on Windows' "$work/engine" || { cat "$work/engine" >&2; fail
 
 # The status does not count a Windows-side codex as installed.
 "$engine" status --json > "$work/status"
-grep -q '"codex":{[^}]*"installed":false' "$work/status" || { cat "$work/status" >&2; fail 'status reported the Windows codex as installed'; }
+# Keys are sorted and the codex object holds nested objects, so match from its start to its own "installed".
+sed 's/.*"codex":{//' "$work/status" | grep -q '"inUse":[^,]*,"installed":false' ||
+    { cat "$work/status" >&2; fail 'status reported the Windows codex as installed'; }
 
 # The terminal UI on the same engine: no Codex panel (nothing installed here), so keys that would add a
 # Codex account do nothing.

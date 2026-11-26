@@ -156,22 +156,34 @@ struct CodexLoginTests {
     }
 }
 
-private func codexAuth(account: String, email: String, refresh: String = "refresh") throws -> Data {
-    let payload = try JSONSerialization.data(withJSONObject: ["email": email])
-        .base64EncodedString().replacingOccurrences(of: "=", with: "")
-        .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+/// A fake Codex `auth.json`. With `accessExpiry` the access token is a JWT carrying that `exp` and the account claim.
+func codexAuth(account: String, email: String, refresh: String = "refresh", accessExpiry: Int? = nil) throws -> Data {
+    let payload = try base64URL(JSONSerialization.data(withJSONObject: ["email": email]))
+    let access = try accessExpiry.map { try fakeAccessToken(account: account, expiry: $0) } ?? "access"
     let auth: [String: Any] = [
         "auth_mode": "chatgpt", "OPENAI_API_KEY": NSNull(), "last_refresh": "2026-09-26T00:00:00Z",
-        "tokens": ["id_token": "h.\(payload).s", "access_token": "access", "refresh_token": refresh, "account_id": account]
+        "tokens": ["id_token": "h.\(payload).s", "access_token": access, "refresh_token": refresh, "account_id": account]
     ]
     return try JSONSerialization.data(withJSONObject: auth, options: [.sortedKeys])
 }
 
-private final class CodexFixture {
+func fakeAccessToken(account: String, expiry: Int) throws -> String {
+    let claims: [String: Any] = ["exp": expiry, "https://api.openai.com/auth": ["chatgpt_account_id": account]]
+    return "h." + base64URL(try JSONSerialization.data(withJSONObject: claims, options: [.sortedKeys])) + ".s"
+}
+
+private func base64URL(_ data: Data) -> String {
+    data.base64EncodedString().replacingOccurrences(of: "=", with: "")
+        .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+}
+
+final class CodexFixture {
     let directory: URL
     var messages: [String] = []
     var keyringHoldsLogin = false
     var beforeReplace: (() -> Void)?
+    var gentleShell: GentleShellSync = .off
+    var now = Date(timeIntervalSince1970: 1_800_000_000)
     private let store = CodexMemoryStore()
 
     init() throws {
@@ -191,12 +203,34 @@ private final class CodexFixture {
 
     var mode: Int? { (try? FileManager.default.attributesOfItem(atPath: authPath))?[.posixPermissions] as? Int }
 
+    /// A fake Gentle Shell agent folder; nothing outside the fixture directory is read or written.
+    var agentDirectory: String { directory.appendingPathComponent("agent").path }
+    var gentleShellAuthPath: String { agentDirectory + "/auth.json" }
+
+    var gentleShellAuth: Data? {
+        get { FileManager.default.contents(atPath: gentleShellAuthPath) }
+        set {
+            try? FileManager.default.createDirectory(atPath: agentDirectory, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(atPath: gentleShellAuthPath)
+            if let newValue {
+                FileManager.default.createFile(atPath: gentleShellAuthPath, contents: newValue, attributes: [.posixPermissions: 0o600])
+            }
+        }
+    }
+
+    var gentleShellMode: Int? {
+        (try? FileManager.default.attributesOfItem(atPath: gentleShellAuthPath))?[.posixPermissions] as? Int
+    }
+
     var system: CodexLoginSystem {
         CodexLoginSystem(
             authPath: authPath, store: store,
             acquireLock: { [directory] in try ManagerFileLock.acquire(directory: directory.appendingPathComponent("lock").path) },
             keyringHoldsLogin: { self.keyringHoldsLogin },
-            beforeReplace: { self.beforeReplace?() }
+            beforeReplace: { self.beforeReplace?() },
+            gentleShell: gentleShell,
+            gentleShellLockWait: 0,
+            now: { self.now }
         )
     }
 
@@ -207,7 +241,7 @@ private final class CodexFixture {
     func cleanup() { try? FileManager.default.removeItem(at: directory) }
 }
 
-private final class CodexMemoryStore: ClaudeLoginDataStore {
+final class CodexMemoryStore: ClaudeLoginDataStore {
     var data: Data?
     func read() throws -> Data {
         guard let data else { throw IsolatedKeychainError.missing }
