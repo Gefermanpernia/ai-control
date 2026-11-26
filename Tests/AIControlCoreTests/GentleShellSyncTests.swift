@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import AIControlCore
 
+private final class UsageTokens: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String: String] = [:]
+    func record(_ account: String, _ token: String) { lock.withLock { stored[account] = token } }
+    var tokens: [String: String] { lock.withLock { stored } }
+}
+
 /// Gentle Shell keeps its own Codex login; with sync on, a Codex switch writes it too. Only fake files are used.
 struct GentleShellSyncTests {
     private func json(_ data: Data?) throws -> [String: Any] {
@@ -191,6 +198,77 @@ struct GentleShellSyncTests {
             "Save that account in AI Control or turn off gentle-shell-sync."
         ))
         #expect(fixture.live == nil)
+    }
+
+    /// Usage of every saved login with sync on, returning the access token each request carried, by account.
+    private func usageTokens(_ fixture: CodexFixture) async -> [String: String] {
+        let seen = UsageTokens()
+        let adapter = CodexLoginAppAdapter(makeSystem: { fixture.system }, services: .init(
+            fetch: { request in
+                seen.record(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") ?? "",
+                            request.value(forHTTPHeaderField: "Authorization") ?? "")
+                return Data("{}".utf8)
+            },
+            signIn: {}, renew: { $0 }, now: { fixture.now }
+        ))
+        _ = await adapter.usage()
+        return seen.tokens
+    }
+
+    private func savedRefresh(_ fixture: CodexFixture, _ alias: String) throws -> String? {
+        let saved = try #require(try CodexLoginManager(system: fixture.system).savedLogins()[alias])
+        return (try json(saved)["tokens"] as? [String: Any])?["refresh_token"] as? String
+    }
+
+    @Test("With sync on, usage of the live account uses Gentle Shell's newer login and saves it")
+    func usageAdoptsNewerGentleShellLogin() async throws {
+        let fixture = try CodexFixture()
+        defer { fixture.cleanup() }
+        _ = try twoSavedLogins(fixture)
+        let newer = try entry(account: "acct-b", refresh: "rb2", expiry: 1_800_009_000)
+        let current = try gentleShellFile(["openai-codex": newer])
+        fixture.gentleShellAuth = current
+        fixture.gentleShell = .on(agentDirectory: fixture.agentDirectory)
+
+        let tokens = await usageTokens(fixture)
+
+        #expect(tokens["acct-b"] == "Bearer " + (newer["access"] as? String ?? ""))
+        let live = try #require(try json(fixture.live)["tokens"] as? [String: Any])
+        #expect(live["refresh_token"] as? String == "rb2" && live["account_id"] as? String == "acct-b")
+        #expect(try savedRefresh(fixture, "home") == "rb2")
+        #expect(fixture.mode == 0o600)
+        #expect(fixture.gentleShellAuth == current)
+        #expect(!FileManager.default.fileExists(atPath: fixture.gentleShellAuthPath + ".lock"))
+    }
+
+    @Test("Usage keeps auth.json when sync is off, Gentle Shell is older, another account, or busy")
+    func usageKeepsLiveLoginOtherwise() async throws {
+        let fixture = try CodexFixture()
+        defer { fixture.cleanup() }
+        let saved = try twoSavedLogins(fixture)
+        let liveAccess = "Bearer " + ((try json(saved.home)["tokens"] as? [String: Any])?["access_token"] as? String ?? "")
+        let cases: [(GentleShellSync, [String: Any], Bool)] = [
+            (.off, try entry(account: "acct-b", refresh: "rb2", expiry: 1_800_009_000), false),
+            (.on(agentDirectory: fixture.agentDirectory), try entry(account: "acct-b", refresh: "rb0", expiry: 1_800_000_500), false),
+            (.on(agentDirectory: fixture.agentDirectory), try entry(account: "acct-a", refresh: "ra2", expiry: 1_800_009_000), false),
+            (.on(agentDirectory: fixture.agentDirectory), try entry(account: "acct-b", refresh: "rb2", expiry: 1_800_009_000), true)
+        ]
+        for (sync, gentleShellEntry, busy) in cases {
+            let current = try gentleShellFile(["openai-codex": gentleShellEntry])
+            fixture.gentleShellAuth = current
+            fixture.gentleShell = sync
+            let lock = fixture.gentleShellAuthPath + ".lock"
+            if busy { try FileManager.default.createDirectory(atPath: lock, withIntermediateDirectories: false) }
+
+            let tokens = await usageTokens(fixture)
+
+            #expect(tokens["acct-b"] == liveAccess, "\(sync) busy=\(busy)")
+            #expect(fixture.live == saved.home)
+            #expect(try savedRefresh(fixture, "home") == "rb1")
+            #expect(fixture.gentleShellAuth == current)
+            #expect(FileManager.default.fileExists(atPath: lock) == busy)
+            if busy { try FileManager.default.removeItem(atPath: lock) }
+        }
     }
 
     @Test("A missing agent folder switches Codex only and says Gentle Shell was not changed")

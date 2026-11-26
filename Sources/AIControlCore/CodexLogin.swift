@@ -210,6 +210,31 @@ struct CodexLoginManager {
         return .withGentleShell
     }
 
+    /// With sync on, brings a strictly newer Gentle Shell login of the live account into auth.json and its saved
+    /// copy, so usage and automatic switching see a current token even when only Gentle Shell renews it.
+    /// Returns whether it adopted one; nothing changes when Gentle Shell has no newer login of that account.
+    @discardableResult
+    func adoptGentleShellLogin() throws -> Bool {
+        guard case .on(let directory) = system.gentleShell else { return false }
+        let lock = try system.acquireLock()
+        defer { lock.release() }
+        guard let live = system.liveData() else { return false }
+        let identity = try CodexAuthFile.identity(live)
+        let file = try GentleShellAuthFile(agentDirectory: directory, wait: system.gentleShellLockWait)
+        defer { file.release() }
+        guard let entry = try file.codexEntry(), entry.accountID == identity.accountID else { return false }
+        let ours = try GentleShellCodexEntry(codexLogin: live)
+        guard entry.expires > ours.expires, entry.refresh != ours.refresh else { return false }
+        var state = try load()
+        guard let alias = alias(for: identity, in: state) else { return false }
+        let adopted = try entry.adopted(into: live, at: system.now())
+        state.logins[alias] = adopted
+        try persist(state)
+        try CodexAuthFile.replace(path: system.authPath, expected: live, with: adopted)
+        guard system.liveData() == adopted else { throw CodexLoginError.readbackMismatch }
+        return true
+    }
+
     /// `codex login` revokes whatever login auth.json holds, so re-save it and move it out of the way first.
     /// Returns the alias that holds the detached login, or nil when Codex was not signed in.
     func prepareLogin() throws -> String? {
@@ -374,7 +399,10 @@ actor CodexLoginAppAdapter {
     /// Usage per saved alias, from auth.json for the live account and saved logins otherwise. An expired
     /// saved login that is not live is first renewed by Codex itself in isolation and saved again.
     func usage() async -> [String: LoginUsageResult] {
-        guard let manager, let services, let saved = try? manager.savedLogins() else { return [:] }
+        guard let manager, let services else { return [:] }
+        // Gentle Shell may be the only one renewing the live account; a problem here just keeps auth.json.
+        _ = try? manager.adoptGentleShellLogin()
+        guard let saved = try? manager.savedLogins() else { return [:] }
         let live = manager.system.liveData()
         let liveAccount = live.flatMap { try? CodexAuthFile.identity($0) }?.accountID
         var results: [String: LoginUsageResult] = [:]

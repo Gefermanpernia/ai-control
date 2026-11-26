@@ -383,11 +383,17 @@ A switch then works like this:
 - If the agent folder is not found, Codex still switches and AI Control says
   Gentle Shell was not changed.
 
+Before usage loads, a newer Gentle Shell login of the account in use is copied into
+`~/.codex/auth.json` and its saved copy, under the same locks. Usage and automatic
+switching keep working when only Gentle Shell renews that login, for example if you
+never run the Codex CLI itself (it is still needed to add and renew saved accounts).
+
 > **Note.** After a switch, the Codex CLI and Gentle Shell hold the same login, and
 > each refreshes it on its own. Whichever refreshes first leaves the other with an
 > outdated refresh token, which can cause an occasional sign-in error in the other
 > one. Switching again (or switching to the same account) copies the newest login
-> back to both.
+> back to both. If you only use Gentle Shell, only it renews the login and this does
+> not happen.
 
 ## Two rules that keep saved logins valid
 
